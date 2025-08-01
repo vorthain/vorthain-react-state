@@ -1,6 +1,6 @@
 {
   "name": "vorthain-react-state",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Zero-configuration reactive state for React. Write natural, mutable code and watch your components update automatically.",
   "type": "module",
   "main": "dist/index.js",
