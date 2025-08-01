@@ -24,7 +24,10 @@ jobs:
         cache: 'npm'
         
     - name: Install dependencies
-      run: npm ci
+      run: |
+        # Handle Rollup npm bug on Linux
+        rm -rf node_modules package-lock.json || true
+        npm install
       
     - name: Run type check
       run: npm run type-check
