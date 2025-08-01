@@ -1,0 +1,22 @@
+{
+  "name": "vorthain-example-ts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "vorthain-react-state": "file:.."
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "typescript": "^5.8.3",
+    "vite": "^4.4.5"
+  }
+}

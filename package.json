@@ -1,0 +1,77 @@
+{
+  "name": "vorthain-react-state",
+  "version": "1.0.0",
+  "description": "Zero-configuration reactive state for React. Write natural, mutable code and watch your components update automatically.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.esm.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "prepare": "npm run build",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run type-check && npm run build",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "keywords": [
+    "react",
+    "state",
+    "state-management",
+    "global-state",
+    "react-state",
+    "mutable",
+    "observable",
+    "synchronous",
+    "store",
+    "hooks",
+    "proxy",
+    "reactive",
+    "vorthain",
+    "fine-grained",
+    "typescript",
+    "zero-config",
+    "no-boilerplate"
+  ],
+  "author": "Angel Zlatanov (angelzbg)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vorthain/vorthain-react-state.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vorthain/vorthain-react-state/issues"
+  },
+  "homepage": "https://github.com/vorthain/vorthain-react-state#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "rollup": "^4.46.2",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3"
+  }
+}
