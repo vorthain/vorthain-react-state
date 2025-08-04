@@ -278,16 +278,12 @@ const bulkUpdate = () => {
 
 ## Migration Path
 
-If your app becomes really complex with heavy performance requirements, **you can easily migrate to [MobX](https://mobx.js.org/)**! Your class-based stores will work with minimal changes:
+If your app becomes really complex with heavy performance requirements, **you can easily migrate to [MobX](https://mobx.js.org/)**! 
+
+**For global stores:**
 
 ```jsx
-// Your existing Vorthain store
-class TodoStore {
-  todos = [];
-  addTodo = (text) => this.todos.push({text, done: false});
-}
-
-// Becomes MobX store with just decorators
+// Your existing Vorthain stores work as-is, just add makeAutoObservable
 import { makeAutoObservable } from 'mobx';
 import { observer } from 'mobx-react-lite';
 
@@ -299,9 +295,23 @@ class TodoStore {
   addTodo = (text) => this.todos.push({text, done: false});
 }
 
+class RootStore {
+  constructor() {
+    makeAutoObservable(this);
+    this.todoStore = new TodoStore(this);
+  }
+}
+
+// Replace Vorthain's global setup with React Context
+import { createContext, useContext } from 'react';
+
+const store = new RootStore();
+const StoreContext = createContext(store);
+const useStore = () => useContext(StoreContext);
+
 // Wrap components with observer
 const TodoList = observer(() => {
-  const store = useAppStore();
+  const store = useStore();
   return <div>...</div>;
 });
 ```
