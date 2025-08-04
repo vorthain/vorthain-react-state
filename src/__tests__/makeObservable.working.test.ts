@@ -3,11 +3,11 @@ import { makeObservable, vAction } from '../makeObservable';
 describe('makeObservable - Working Coverage Tests', () => {
   describe('Core functionality', () => {
     test('handles primitives correctly', () => {
-      expect(makeObservable(null)).toBe(null);
-      expect(makeObservable(undefined)).toBe(undefined);
-      expect(makeObservable(42)).toBe(42);
-      expect(makeObservable('string')).toBe('string');
-      expect(makeObservable(true)).toBe(true);
+      expect(makeObservable(null as any)).toBe(null);
+      expect(makeObservable(undefined as any)).toBe(undefined);
+      expect(makeObservable(42 as any)).toBe(42);
+      expect(makeObservable('string' as any)).toBe('string');
+      expect(makeObservable(true as any)).toBe(true);
     });
 
     test('makes objects reactive', () => {
@@ -127,7 +127,7 @@ describe('makeObservable - Working Coverage Tests', () => {
     });
 
     test('handles unshift with objects', () => {
-      const arr = [1, 2, 3];
+      const arr: any[] = [1, 2, 3]; // <- Add : any[] here
       const reactive = makeObservable(arr);
 
       const obj = { id: 'new' };
