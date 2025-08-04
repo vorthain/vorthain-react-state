@@ -4,13 +4,45 @@ name: Smart Version & Publish
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: |
+        # Handle Rollup npm bug on Linux
+        rm -rf node_modules package-lock.json || true
+        npm install
+      
+    - name: Run type check
+      run: npm run type-check
+      
+    - name: Run tests with coverage
+      run: npm run test:ci
+      
+    - name: Build package
+      run: npm run build
+
   smart-publish:
     runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
     - name: Checkout code
@@ -34,6 +66,9 @@ jobs:
       
     - name: Run type check
       run: npm run type-check
+      
+    - name: Run tests
+      run: npm run test:ci
       
     - name: Build package
       run: npm run build

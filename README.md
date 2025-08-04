@@ -22,6 +22,63 @@ return (
 );
 ```
 
+## Why Choose Simplicity?
+
+Compare these two approaches for updating a nested property:
+
+**Traditional React (useReducer + immutable updates):**
+```jsx
+const drawersReducer = (state, action) => {
+  switch (action.type) {
+    case 'UPDATE_PAGE_TITLE':
+      return {
+        ...state,
+        drawers: state.drawers.map((drawer) => ({
+          ...drawer,
+          folders: drawer.folders.map((folder) => ({
+            ...folder,
+            pages: folder.pages.map((page) =>
+              page.id === action.pageId ? { ...page, title: action.newTitle } : page
+            )
+          }))
+        }))
+      };
+    default:
+      return state;
+  }
+};
+
+// Usage
+dispatch({ type: 'UPDATE_PAGE_TITLE', pageId: page.id, newTitle: page.title + ' - Edited' });
+```
+
+**Vorthain (direct mutation):**
+```jsx
+page.title = page.title + ' - Edited';
+```
+
+If the first approach looks perfectly reasonable to you, **just skip this library**. Vorthain is for developers who find that ceremony tedious and want to focus on business logic instead.
+
+## Performance Characteristics
+
+**Vorthain is optimized for developer experience, not render performance.** Here's what you should know:
+
+- ✅ **Same performance as React useReducer + Context** (all connected components re-render on changes)
+- ✅ **Much simpler code** - direct mutations vs complex reducers
+- ✅ **Automatic reactivity** - no manual subscriptions needed
+- ❌ **No surgical re-renders** - components re-render even if they don't use changed data
+
+**Perfect for:**
+- Rapid prototyping
+- Small to medium apps
+- Teams that prefer simple, readable code
+- Developers coming from Vue/Svelte/Angular
+
+**Consider alternatives if:**
+- You need optimized re-renders for large component trees
+- You prefer explicit, predictable state updates
+- Your team is already comfortable with Redux/Zustand patterns
+
 ## Installation
 
 ```bash
@@ -97,19 +154,12 @@ function TodoApp() {
 ```jsx
 // stores/TodoStore.js
 export class TodoStore {
-  /**
-   * @param {import('./RootStore').RootStore} rootStore
-   */
+  /** @param {import('./RootStore').RootStore} rootStore */
   constructor(rootStore) {
-    /** @type {import('./RootStore').RootStore} */
-    this.rootStore = rootStore;
-    /** @type {Array<{id: number, text: string, done: boolean}>} */
+    this.rootStore = rootStore; // For cross-store communication
     this.todos = [];
   }
   
-  /**
-   * @param {string} text
-   */
   addTodo = (text) => {
     this.todos.push({ id: Date.now(), text, done: false });
     
@@ -117,50 +167,13 @@ export class TodoStore {
     this.rootStore.userStore.someMethod?.();
   }
   
-  /**
-   * @param {number} id
-   */
   toggleTodo = (id) => {
     const todo = this.todos.find(t => t.id === id);
     if (todo) todo.done = !todo.done;
   }
   
-  /**
-   * @returns {number}
-   */
   get completedCount() {
     return this.todos.filter(t => t.done).length;
-  }
-}
-
-// stores/UserStore.js  
-export class UserStore {
-  /**
-   * @param {import('./RootStore').RootStore} rootStore
-   */
-  constructor(rootStore) {
-    /** @type {import('./RootStore').RootStore} */
-    this.rootStore = rootStore;
-    /** @type {{name: string}} */
-    this.currentUser = { name: 'Guest' };
-    /** @type {boolean} */
-    this.isLoggedIn = false;
-  }
-  
-  /**
-   * @param {Object} credentials
-   * @returns {Promise<void>}
-   */
-  login = async (credentials) => {
-    const response = await fetch('/api/login', {
-      method: 'POST',
-      body: JSON.stringify(credentials)
-    });
-    
-    if (response.ok) {
-      this.currentUser = await response.json();
-      this.isLoggedIn = true;
-    }
   }
 }
 
@@ -170,16 +183,10 @@ import { UserStore } from './UserStore';
 
 export class RootStore {
   constructor() {
-    // Pass 'this' to child stores for cross-store communication
-    /** @type {TodoStore} */
     this.todoStore = new TodoStore(this);
-    /** @type {UserStore} */
     this.userStore = new UserStore(this);
   }
   
-  /**
-   * @returns {string}
-   */
   get appTitle() {
     return `${this.userStore.currentUser.name}'s Todos (${this.todoStore.completedCount})`;
   }
@@ -196,14 +203,12 @@ import { RootStore } from './stores/RootStore';
 // Initialize once at app startup
 createVorthainStore(RootStore);
 
-// Create typed hook for better DX
-/** @returns {import('./stores/RootStore').RootStore} */
-const useAppStore = () => {
-  return useVglobal();
-};
+// For autocomplete in JavaScript, create a typed hook:
+/** @returns {RootStore} */
+const useAppStore = () => useVglobal();
 
 function App() {
-  const store = useAppStore(); // Full autocomplete & type safety
+  const store = useAppStore(); // Now you get full autocomplete!
   
   return (
     <div>
@@ -219,28 +224,28 @@ function App() {
 
 ## Core Features
 
-### Everything is Reactive
-```jsx
-const state = useVstate({
-  user: { profile: { name: 'John' } },
-  items: [1, 2, 3]
-});
-
-// All trigger re-renders automatically:
-state.user.profile.name = 'Jane';
-state.items.push(4);
-state.items[0] = 99;
-```
-
 ### Direct Mutations
 ```jsx
 // ❌ Traditional React
 setTodos(todos => [...todos, newTodo]);
-setTodos(todos => todos.map(t => t.id === id ? {...t, done: true} : t));
+setUser(user => ({...user, name: 'Jane'}));
 
 // ✅ Vorthain
 state.todos.push(newTodo);
-state.todos.find(t => t.id === id).done = true;
+state.user.name = 'Jane';
+```
+
+### Everything is Reactive
+```jsx
+const state = useVstate({
+  user: { name: 'John' },
+  items: [1, 2, 3]
+});
+
+// All mutations trigger re-renders automatically:
+state.user.name = 'Jane';
+state.items.push(4);
+state.items[0] = 99;
 ```
 
 ### Computed Properties
@@ -250,111 +255,68 @@ const state = useVstate({
   filter: 'all',
   
   get filteredTodos() {
-    if (state.filter === 'active') return state.todos.filter(t => !t.done);
-    if (state.filter === 'done') return state.todos.filter(t => t.done);
-    return state.todos;
+    return state.filter === 'done' 
+      ? state.todos.filter(t => t.done)
+      : state.todos;
   }
 });
-
-// Updates automatically when todos or filter changes
-<p>Showing {state.filteredTodos.length} todos</p>
 ```
 
-### Batch Updates with vAction
+### Batch Updates
 ```jsx
 import { vAction } from 'vorthain-react-state';
 
-// Multiple updates batched - each component re-renders at most once
 const bulkUpdate = () => {
   vAction(() => {
+    // Multiple mutations, single re-render
     for (let i = 0; i < 100; i++) {
       state.items.push(`Item ${i}`);
-      state.counters[i] = i * 2;
     }
-    // Each component using this data re-renders only once
   });
 };
 ```
 
-## Advanced Examples
+## Migration Path
 
-### Form with Validation
+If your app becomes really complex with heavy performance requirements, **you can easily migrate to [MobX](https://mobx.js.org/)**! Your class-based stores will work with minimal changes:
+
 ```jsx
-const form = useVstate({
-  data: { name: '', email: '' },
-  errors: {},
-  
-  validate: () => {
-    form.errors = {};
-    if (!form.data.name) form.errors.name = 'Required';
-    if (!form.data.email.includes('@')) form.errors.email = 'Invalid email';
-  },
-  
-  get isValid() {
-    return Object.keys(form.errors).length === 0;
-  },
-  
-  submit: async () => {
-    form.validate();
-    if (!form.isValid) return;
-    
-    const response = await fetch('/api/submit', {
-      method: 'POST',
-      body: JSON.stringify(form.data)
-    });
-    
-    if (response.ok) {
-      console.log('Success!');
-    }
+// Your existing Vorthain store
+class TodoStore {
+  todos = [];
+  addTodo = (text) => this.todos.push({text, done: false});
+}
+
+// Becomes MobX store with just decorators
+import { makeAutoObservable } from 'mobx';
+import { observer } from 'mobx-react-lite';
+
+class TodoStore {
+  constructor() { 
+    makeAutoObservable(this); // Add this line
   }
+  todos = [];
+  addTodo = (text) => this.todos.push({text, done: false});
+}
+
+// Wrap components with observer
+const TodoList = observer(() => {
+  const store = useAppStore();
+  return <div>...</div>;
 });
 ```
 
-### Real-time Data
+**For local state,** replace `useVstate` with MobX's `useLocalObservable`:
+
 ```jsx
-const chat = useVstate({
-  messages: [],
-  ws: null,
-  status: 'disconnected',
-  
-  connect: () => {
-    chat.ws = new WebSocket('wss://chat.example.com');
-    chat.status = 'connecting';
-    
-    chat.ws.onopen = () => {
-      chat.status = 'connected';
-    };
-    
-    chat.ws.onmessage = (event) => {
-      chat.messages.push(JSON.parse(event.data));
-    };
-  },
-  
-  sendMessage: (text) => {
-    if (chat.ws) {
-      chat.ws.send(JSON.stringify({ text }));
-    }
-  }
-});
+// Vorthain
+const state = useVstate({ count: 0, increment: () => state.count++ });
+
+// MobX  
+const state = useLocalObservable(() => ({ count: 0, increment: () => state.count++ }));
 ```
 
-### Persistent State
-```jsx
-const settings = useVstate({
-  theme: localStorage.getItem('theme') || 'light',
-  language: localStorage.getItem('language') || 'en',
-  
-  setTheme: (theme) => {
-    settings.theme = theme;
-    localStorage.setItem('theme', theme);
-  },
-  
-  setLanguage: (lang) => {
-    settings.language = lang;
-    localStorage.setItem('language', lang);
-  }
-});
-```
+MobX gives you surgical re-renders and advanced debugging tools while keeping the same mutation-based API.
 
 ## TypeScript Support
 
@@ -378,9 +340,6 @@ export class TodoStore {
   
   addTodo = (text: string): void => {
     this.todos.push({ id: Date.now(), text, done: false });
-    
-    // Cross-store communication with full type safety
-    this.rootStore.userStore.someMethod?.();
   }
   
   get activeTodos(): Todo[] {
@@ -388,131 +347,20 @@ export class TodoStore {
   }
 }
 
-export class UserStore {
-  rootStore: RootStore;
-  currentUser = { name: 'Guest' };
-  isLoggedIn = false;
-  
-  constructor(rootStore: RootStore) {
-    this.rootStore = rootStore;
-  }
-  
-  login = async (credentials: any): Promise<void> => {
-    const response = await fetch('/api/login', {
-      method: 'POST',
-      body: JSON.stringify(credentials)
-    });
-    
-    if (response.ok) {
-      this.currentUser = await response.json();
-      this.isLoggedIn = true;
-    }
-  }
-}
-
 export class RootStore {
   todoStore: TodoStore;
-  userStore: UserStore;
   
   constructor() {
     this.todoStore = new TodoStore(this);
-    this.userStore = new UserStore(this);
-  }
-  
-  get appTitle(): string {
-    return `${this.userStore.currentUser.name}'s Todos (${this.todoStore.completedCount})`;
   }
 }
 
-// hooks/useAppStore.ts - Create typed hook
+// hooks/useAppStore.ts - Create typed hook for autocomplete
 import { useVglobal } from 'vorthain-react-state';
 import type { RootStore } from '../stores/RootStore';
 
 export const useAppStore = (): RootStore => {
   return useVglobal<RootStore>();
-};
-
-// components/TodoList.tsx - Use with full type safety
-import { useAppStore } from '../hooks/useAppStore';
-
-export function TodoList() {
-  const store = useAppStore(); // Full autocomplete!
-  
-  return (
-    <div>
-      {store.todoStore.activeTodos.map(todo => (
-        <div key={todo.id}>{todo.text}</div>
-      ))}
-    </div>
-  );
-}
-```
-
-### JavaScript with JSDoc
-
-```jsx
-// stores/RootStore.js
-/**
- * @typedef {Object} Todo
- * @property {number} id
- * @property {string} text  
- * @property {boolean} done
- */
-
-export class TodoStore {
-  /**
-   * @param {RootStore} rootStore
-   */
-  constructor(rootStore) {
-    /** @type {RootStore} */
-    this.rootStore = rootStore;
-    /** @type {Todo[]} */
-    this.todos = [];
-  }
-  
-  /** @param {string} text */
-  addTodo = (text) => {
-    this.todos.push({ id: Date.now(), text, done: false });
-    
-    // Cross-store communication with JSDoc type hints
-    this.rootStore.userStore.someMethod?.();
-  }
-  
-  /** @returns {Todo[]} */
-  get activeTodos() {
-    return this.todos.filter(t => !t.done);
-  }
-}
-
-export class UserStore {
-  /**
-   * @param {RootStore} rootStore
-   */
-  constructor(rootStore) {
-    /** @type {RootStore} */
-    this.rootStore = rootStore;
-    this.currentUser = { name: 'Guest' };
-  }
-}
-
-export class RootStore {
-  constructor() {
-    /** @type {TodoStore} */
-    this.todoStore = new TodoStore(this);
-    /** @type {UserStore} */
-    this.userStore = new UserStore(this);
-  }
-}
-
-// hooks/useAppStore.js
-import { useVglobal } from 'vorthain-react-state';
-
-/**
- * Custom hook for accessing the global store with full type hints
- * @returns {import('../stores/RootStore').RootStore}
- */
-export const useAppStore = () => {
-  return useVglobal();
 };
 ```
 
@@ -528,7 +376,7 @@ Initializes global store (call once at app startup).
 Returns the global store instance.
 
 ### `vAction(fn)`
-Batches multiple updates so each component re-renders at most once, regardless of how many mutations occur inside the function.
+Batches multiple mutations so components re-render once after all changes complete, instead of after each individual mutation.
 
 ## Migration
 
@@ -558,14 +406,24 @@ const state = useVstate({
 });
 ```
 
+## Philosophy
+
+Vorthain prioritizes **developer experience over performance optimization**. The core principles are:
+
+- Most apps don't need surgical re-renders
+- Simple, readable code prevents more bugs than complex optimizations
+- Developer productivity matters more than milliseconds
+- You can always optimize later if needed
+
+If you disagree with these priorities, consider using [Zustand](https://github.com/pmndrs/zustand), [Jotai](https://jotai.org/), or [Redux Toolkit](https://redux-toolkit.js.org/) instead.
+
 ## Why Vorthain?
 
-- **🎯 Zero Boilerplate** - No actions, reducers, or dispatch
-- **🔄 Automatic Updates** - Components re-render when accessed data changes
-- **🏎️ Granular** - Only components using changed data update
+- **🎯 Zero Boilerplate** - No actions, reducers, or dispatch calls
+- **🔄 Automatic Updates** - Components re-render when state changes
 - **🧠 Natural** - Write code the way you think
-- **🔧 TypeScript** - Full type safety with zero config
-- **⚡ Fast** - Optimized reactivity with batching to prevent excessive re-renders
+- **🔧 TypeScript** - Full type safety with zero configuration
+- **⚡ Simple** - Focus on business logic, not state management patterns
 
 ---
 
