@@ -1,6 +1,6 @@
 {
   "name": "vorthain-react-state",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Zero-configuration reactive state for React. Write natural, mutable code and watch your components update automatically.",
   "type": "module",
   "main": "dist/index.js",
@@ -114,7 +114,7 @@
     ],
     "coverageReporters": [
       "text",
-      "lcov", 
+      "lcov",
       "html"
     ],
     "coverageThreshold": {
@@ -134,9 +134,12 @@
       "^@/(.*)$": "<rootDir>/src/$1"
     },
     "transform": {
-      "^.+\\.(ts|tsx)$": ["ts-jest", {
-        "useESM": true
-      }]
+      "^.+\\.(ts|tsx)$": [
+        "ts-jest",
+        {
+          "useESM": true
+        }
+      ]
     },
     "extensionsToTreatAsEsm": [
       ".ts",
