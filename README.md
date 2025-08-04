@@ -431,7 +431,7 @@ If you disagree with these priorities, consider using [Zustand](https://github.c
 
 - **🎯 Zero Boilerplate** - No actions, reducers, or dispatch calls
 - **🔄 Automatic Updates** - Components re-render when state changes
-- **🧠 Natural** - Write code the way you think
+- **🧠 Natural** - Write code in a sane way
 - **🔧 TypeScript** - Full type safety with zero configuration
 - **⚡ Simple** - Focus on business logic, not state management patterns
 
