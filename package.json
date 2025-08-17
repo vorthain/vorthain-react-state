@@ -1,6 +1,6 @@
 {
   "name": "@vorthain/react-state",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A minimal and reactive state management library for React, enabling automatic UI updates through direct, mutable state changes.",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
@@ -34,8 +34,12 @@
     "react-dom": ">=19.0.0"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": false },
-    "react-dom": { "optional": false }
+    "react": {
+      "optional": false
+    },
+    "react-dom": {
+      "optional": false
+    }
   },
   "keywords": [
     "react",
