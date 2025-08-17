@@ -1,7 +1,7 @@
-# 🚀 Vorthain React State
+# 🚀 @vorthain/react-state
 
-[![npm version](https://badge.fury.io/js/vorthain-react-state.svg)](https://www.npmjs.com/package/vorthain-react-state)
-[![Downloads](https://img.shields.io/npm/dm/vorthain-react-state.svg)](https://www.npmjs.com/package/vorthain-react-state)
+[![npm version](https://badge.fury.io/js/@vorthain/react-state.svg)](https://www.npmjs.com/package/@vorthain/react-state)
+[![Downloads](https://img.shields.io/npm/dm/@vorthain/react-state.svg)](https://www.npmjs.com/package/@vorthain/react-state)
 
 **Zero-configuration reactive state for React**
 
@@ -20,6 +20,12 @@ return (
     <button onClick={state.increment}>+1</button>
   </div>
 );
+```
+
+## Installation
+
+```bash
+npm install @vorthain/react-state
 ```
 
 ## Why Choose Simplicity?
@@ -57,97 +63,33 @@ dispatch({ type: 'UPDATE_PAGE_TITLE', pageId: page.id, newTitle: page.title + ' 
 page.title = page.title + ' - Edited';
 ```
 
-If the first approach looks perfectly reasonable to you, **just skip this library**. Vorthain is for developers who find that ceremony tedious and want to focus on business logic instead.
-
-## Performance Characteristics
-
-**Vorthain is optimized for developer experience, not render performance.** Here's what you should know:
-
-- ✅ **Same performance as React useReducer + Context** (all connected components re-render on changes)
-- ✅ **Much simpler code** - direct mutations vs complex reducers
-- ✅ **Automatic reactivity** - no manual subscriptions needed
-- ❌ **No surgical re-renders** - components re-render even if they don't use changed data
-
-**Perfect for:**
-- Rapid prototyping
-- Small to medium apps
-- Teams that prefer simple, readable code
-- Developers coming from Vue/Svelte/Angular
-
-**Consider alternatives if:**
-- You need optimized re-renders for large component trees
-- You prefer explicit, predictable state updates
-- Your team is already comfortable with Redux/Zustand patterns
-
-## Installation
-
-```bash
-npm install vorthain-react-state
-```
-
 ## Quick Start
 
-### Local State
+### Local State with useVstate
 
 ```jsx
-import { useVstate } from 'vorthain-react-state';
+import { useVstate } from '@vorthain/react-state';
 
-function TodoApp() {
+function Counter() {
   const state = useVstate({
-    todos: [],
-    newTodo: '',
-    
-    addTodo: () => {
-      if (state.newTodo.trim()) {
-        state.todos.push({ 
-          id: Date.now(), 
-          text: state.newTodo, 
-          done: false 
-        });
-        state.newTodo = '';
-      }
-    },
-    
-    toggleTodo: (id) => {
-      const todo = state.todos.find(t => t.id === id);
-      if (todo) todo.done = !todo.done;
-    },
-    
-    get completedCount() {
-      return state.todos.filter(t => t.done).length;
-    }
+    count: 0,
+    increment: () => state.count++,
+    decrement: () => state.count--,
+    get doubled() { return state.count * 2; }
   });
 
   return (
     <div>
-      <h1>Todos ({state.completedCount}/{state.todos.length})</h1>
-      
-      <input 
-        value={state.newTodo}
-        onChange={e => state.newTodo = e.target.value}
-        onKeyDown={e => e.key === 'Enter' && state.addTodo()}
-        placeholder="Add todo..."
-      />
-      <button onClick={state.addTodo}>Add</button>
-      
-      {state.todos.map(todo => (
-        <div key={todo.id}>
-          <input 
-            type="checkbox" 
-            checked={todo.done}
-            onChange={() => state.toggleTodo(todo.id)}
-          />
-          <span style={{ textDecoration: todo.done ? 'line-through' : 'none' }}>
-            {todo.text}
-          </span>
-        </div>
-      ))}
+      <p>Count: {state.count}</p>
+      <p>Doubled: {state.doubled}</p>
+      <button onClick={state.increment}>+1</button>
+      <button onClick={state.decrement}>-1</button>
     </div>
   );
 }
 ```
 
-### Global State
+### Global State with useVglobal
 
 **1. Create your stores:**
 
@@ -161,10 +103,15 @@ export class TodoStore {
   }
   
   addTodo = (text) => {
-    this.todos.push({ id: Date.now(), text, done: false });
+    this.todos.push({ 
+      id: Date.now(), 
+      text, 
+      done: false,
+      priority: 'medium'
+    });
     
-    // Cross-store communication example
-    this.rootStore.userStore.someMethod?.();
+    // Can access other stores
+    this.rootStore.userStore.updateLastActivity();
   }
   
   toggleTodo = (id) => {
@@ -174,6 +121,25 @@ export class TodoStore {
   
   get completedCount() {
     return this.todos.filter(t => t.done).length;
+  }
+}
+
+// stores/UserStore.js
+export class UserStore {
+  /** @param {import('./RootStore').RootStore} rootStore */
+  constructor(rootStore) {
+    this.rootStore = rootStore;
+    this.name = 'John';
+    this.preferences = { theme: 'dark' };
+    this.lastActivity = Date.now();
+  }
+  
+  updateLastActivity = () => {
+    this.lastActivity = Date.now();
+  }
+  
+  setTheme = (theme) => {
+    this.preferences.theme = theme;
   }
 }
 
@@ -187,157 +153,240 @@ export class RootStore {
     this.userStore = new UserStore(this);
   }
   
+  // Root-level computed properties can access all stores
   get appTitle() {
-    return `${this.userStore.currentUser.name}'s Todos (${this.todoStore.completedCount})`;
+    return `${this.userStore.name}'s Todos (${this.todoStore.completedCount} done)`;
   }
 }
 ```
 
-**2. Initialize and use:**
+**2. Create a hook that initializes and provides the store:**
 
 ```jsx
-// main.jsx
-import { createVorthainStore, useVglobal } from 'vorthain-react-state';
-import { RootStore } from './stores/RootStore';
+// hooks/useStore.js - Everything in one place!
+import { createVorthainStore, useVglobal } from '@vorthain/react-state';
+import { RootStore } from '../stores/RootStore';
 
-// Initialize once at app startup
+// Initialize store
 createVorthainStore(RootStore);
 
-// For autocomplete in JavaScript, create a typed hook:
-/** @returns {RootStore} */
-const useAppStore = () => useVglobal();
+// Export typed hook for use in components
+/** @returns {import('../stores/RootStore').RootStore} */
+export const useStore = () => useVglobal();
+```
 
-function App() {
-  const store = useAppStore(); // Now you get full autocomplete!
+**3. Import and use anywhere:**
+
+```jsx
+// components/TodoApp.jsx
+import { useStore } from '../hooks/useStore';
+
+function TodoApp() {
+  const store = useStore(); // Full autocomplete!
   
   return (
     <div>
       <h1>{store.appTitle}</h1>
-      <button onClick={() => store.todoStore.addTodo('New task')}>
+      <p>User: {store.userStore.name}</p>
+      <p>Todos: {store.todoStore.completedCount}/{store.todoStore.todos.length}</p>
+      
+      <button onClick={() => store.todoStore.addTodo('New Task')}>
         Add Todo
       </button>
-      <p>Completed: {store.todoStore.completedCount}</p>
+      
+      {store.todoStore.todos.map(todo => (
+        <div key={todo.id}>
+          <input 
+            type="checkbox" 
+            checked={todo.done}
+            onChange={() => store.todoStore.toggleTodo(todo.id)}
+          />
+          {todo.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// components/UserProfile.jsx  
+import { useStore } from '../hooks/useStore';
+
+function UserProfile() {
+  const store = useStore(); // Same hook, full autocomplete!
+  
+  return (
+    <div>
+      <h2>{store.userStore.name}</h2>
+      <button onClick={() => store.userStore.setTheme('light')}>
+        Switch Theme
+      </button>
     </div>
   );
 }
 ```
 
+## Fine-Grained Reactivity with vGrip
+
+Optimize components to only re-render when their specific dependencies change:
+
+```jsx
+import { vGrip } from '@vorthain/react-state';
+
+// Individual todo items only re-render when their data changes
+const TodoItem = vGrip(({ todo }) => {
+  return (
+    <div>
+      <input 
+        type="checkbox" 
+        checked={todo.done}
+        onChange={() => todo.done = !todo.done}
+      />
+      <span>{todo.text}</span>
+      <button onClick={() => todo.priority = 'high'}>
+        Mark High Priority
+      </button>
+    </div>
+  );
+});
+
+// Todo list only re-renders when array changes
+const TodoList = vGrip(() => {
+  const store = useVglobal();
+  
+  return (
+    <div>
+      <h2>Todos ({store.todos.length})</h2>
+      {store.todos.map(todo => (
+        <TodoItem key={todo.id} todo={todo} />
+      ))}
+    </div>
+  );
+});
+```
+
+## Batching Updates with vAction
+
+Batch multiple mutations into a single re-render:
+
+```jsx
+import { vAction } from '@vorthain/react-state';
+
+const addManyTodos = () => {
+  vAction(() => {
+    // All mutations happen, then one re-render
+    for (let i = 0; i < 100; i++) {
+      store.todos.push({ text: `Todo ${i}` });
+    }
+    store.user.preferences.lastBulkAdd = Date.now();
+  });
+};
+```
+
 ## Core Features
 
 ### Direct Mutations
-```jsx
-// ❌ Traditional React
-setTodos(todos => [...todos, newTodo]);
-setUser(user => ({...user, name: 'Jane'}));
 
-// ✅ Vorthain
-state.todos.push(newTodo);
+Everything works with natural JavaScript:
+
+```jsx
+// Objects
 state.user.name = 'Jane';
+state.user.settings.theme = 'light';
+
+// Arrays  
+state.items.push(newItem);
+state.items[0] = updatedItem;
+state.items.splice(2, 1);
+
+// Maps
+state.cache.set('key', value);
+state.cache.delete('key');
+
+// Sets
+state.tags.add('react');
+state.tags.delete('vue');
 ```
 
-### Everything is Reactive
-```jsx
-const state = useVstate({
-  user: { name: 'John' },
-  items: [1, 2, 3]
-});
+### Computed Properties (Getters)
 
-// All mutations trigger re-renders automatically:
-state.user.name = 'Jane';
-state.items.push(4);
-state.items[0] = 99;
-```
-
-### Computed Properties
 ```jsx
 const state = useVstate({
   todos: [],
   filter: 'all',
   
   get filteredTodos() {
-    return state.filter === 'done' 
-      ? state.todos.filter(t => t.done)
-      : state.todos;
-  }
-});
-```
-
-### Batch Updates
-```jsx
-import { vAction } from 'vorthain-react-state';
-
-const bulkUpdate = () => {
-  vAction(() => {
-    // Multiple mutations, single re-render
-    for (let i = 0; i < 100; i++) {
-      state.items.push(`Item ${i}`);
+    switch(state.filter) {
+      case 'done': return state.todos.filter(t => t.done);
+      case 'active': return state.todos.filter(t => !t.done);
+      default: return state.todos;
     }
-  });
-};
-```
-
-## Migration Path
-
-If your app becomes really complex with heavy performance requirements, **you can easily migrate to [MobX](https://mobx.js.org/)**! 
-
-**For global stores:**
-
-```jsx
-// Your existing Vorthain stores work as-is, just add makeAutoObservable
-import { makeAutoObservable } from 'mobx';
-import { observer } from 'mobx-react-lite';
-
-class TodoStore {
-  constructor() { 
-    makeAutoObservable(this); // Add this line
+  },
+  
+  get completedCount() {
+    return state.todos.filter(t => t.done).length;
+  },
+  
+  get activeCount() {
+    return state.todos.filter(t => !t.done).length;
+  },
+  
+  get completedPercentage() {
+    return state.todos.length > 0 
+      ? Math.round((state.completedCount / state.todos.length) * 100)
+      : 0;
   }
-  todos = [];
-  addTodo = (text) => this.todos.push({text, done: false});
-}
-
-class RootStore {
-  constructor() {
-    makeAutoObservable(this);
-    this.todoStore = new TodoStore(this);
-  }
-}
-
-// Replace Vorthain's global setup with React Context
-import { createContext, useContext } from 'react';
-
-const store = new RootStore();
-const StoreContext = createContext(store);
-const useStore = () => useContext(StoreContext);
-
-// Wrap components with observer
-const TodoList = observer(() => {
-  const store = useStore();
-  return <div>...</div>;
 });
 ```
 
-**For local state,** replace `useVstate` with MobX's `useLocalObservable`:
+### Deep Reactivity
+
+Nested changes are automatically tracked:
 
 ```jsx
-// Vorthain
-const state = useVstate({ count: 0, increment: () => state.count++ });
+const state = useVstate({
+  company: {
+    name: 'Acme Corp',
+    employees: [
+      { name: 'John', tasks: ['Design', 'Code'] },
+      { name: 'Jane', tasks: ['Test', 'Deploy'] }
+    ]
+  }
+});
 
-// MobX  
-const state = useLocalObservable(() => ({ count: 0, increment: () => state.count++ }));
+// All of these trigger re-renders:
+state.company.name = 'New Corp';
+state.company.employees[0].name = 'Johnny';
+state.company.employees[1].tasks.push('Document');
 ```
 
-MobX gives you surgical re-renders and advanced debugging tools while keeping the same mutation-based API.
+## TypeScript & JavaScript Support
 
-## TypeScript Support
+### TypeScript
 
-Full type safety with custom typed hooks:
+**Full TypeScript support with proper typing:**
+
+**Note on Strict Mode:** If you have `"strict": true` in your `tsconfig.json`, `useVstate`'s type inference works best when you provide an initializer function.
+
+**Do this:**
+```tsx
+const state = useVstate(() => ({ count: 0 }));
+```
+
+**Instead of this:**
+```tsx
+const state = useVstate({ count: 0 });
+```
 
 ```tsx
 // stores/RootStore.ts
+import { UserStore } from './UserStore';
+import { TodoStore } from './TodoStore';
+
 interface Todo {
   id: number;
   text: string;
   done: boolean;
+  priority: 'low' | 'medium' | 'high';
 }
 
 export class TodoStore {
@@ -347,98 +396,291 @@ export class TodoStore {
   constructor(rootStore: RootStore) {
     this.rootStore = rootStore;
   }
-  
-  addTodo = (text: string): void => {
-    this.todos.push({ id: Date.now(), text, done: false });
-  }
-  
-  get activeTodos(): Todo[] {
-    return this.todos.filter(t => !t.done);
-  }
+  // ... other methods
+}
+
+export class UserStore {
+    rootStore: RootStore;
+    name = 'Jane';
+
+    constructor(rootStore: RootStore) {
+        this.rootStore = rootStore;
+    }
+    // ... other methods
 }
 
 export class RootStore {
   todoStore: TodoStore;
+  userStore: UserStore;
   
   constructor() {
     this.todoStore = new TodoStore(this);
+    this.userStore = new UserStore(this);
   }
 }
 
-// hooks/useAppStore.ts - Create typed hook for autocomplete
-import { useVglobal } from 'vorthain-react-state';
-import type { RootStore } from '../stores/RootStore';
+// hooks/useStore.ts - Initialize and export typed hook
+import { createVorthainStore, useVglobal } from '@vorthain/react-state';
+import { RootStore } from '../stores/RootStore';
 
-export const useAppStore = (): RootStore => {
-  return useVglobal<RootStore>();
+// Initialize store (happens once)
+createVorthainStore(RootStore);
+
+// Export typed hook
+export const useStore = (): RootStore => {
+  return useVglobal();
+};
+```
+
+### JavaScript
+
+**Full autocomplete support using JSDoc:**
+
+```jsx
+// stores/TodoStore.js
+export class TodoStore {
+  /** @param {import('./RootStore').RootStore} rootStore */
+  constructor(rootStore) {
+    this.rootStore = rootStore;
+    this.todos = [];
+  }
+  // ... methods
+}
+
+// stores/UserStore.js
+export class UserStore {
+  /** @param {import('./RootStore').RootStore} rootStore */
+  constructor(rootStore) {
+    this.rootStore = rootStore;
+    this.name = 'John';
+  }
+  // ... methods
+}
+
+// stores/RootStore.js
+import { TodoStore } from './TodoStore';
+import { UserStore } from './UserStore';
+
+export class RootStore {
+  constructor() {
+    this.todoStore = new TodoStore(this);
+    this.userStore = new UserStore(this);
+  }
+  
+  get appTitle() {
+    return `${this.userStore.name}'s Todos`;
+  }
+}
+
+// hooks/useStore.js - Initialize and export typed hook
+import { createVorthainStore, useVglobal } from '@vorthain/react-state';
+import { RootStore } from '../stores/RootStore';
+
+// Initialize store (happens once)
+createVorthainStore(RootStore);
+
+// Export typed hook
+/** @returns {RootStore} */
+export const useStore = () => {
+  return useVglobal();
 };
 ```
 
 ## API Reference
 
 ### `useVstate(initialState)`
+
 Creates reactive local state for a component.
 
-### `createVorthainStore(StoreClass)`  
-Initializes global store (call once at app startup).
-
-### `useVglobal()`
-Returns the global store instance.
-
-### `vAction(fn)`
-Batches multiple mutations so components re-render once after all changes complete, instead of after each individual mutation.
-
-## Migration
-
-### From useState
 ```jsx
-// Before
-const [count, setCount] = useState(0);
-const increment = () => setCount(c => c + 1);
-
-// After  
-const state = useVstate({ 
+const state = useVstate({
   count: 0,
   increment: () => state.count++
 });
 ```
 
-### From useReducer
-```jsx
-// Before
-const [state, dispatch] = useReducer(reducer, { todos: [] });
-dispatch({ type: 'ADD_TODO', text });
+### `createVorthainStore(StoreClass)`
 
-// After
-const state = useVstate({
-  todos: [],
-  addTodo: (text) => state.todos.push({ text, done: false })
+Initializes global store. Call once at app startup.
+
+```jsx
+createVorthainStore(RootStore);
+```
+
+### `useVglobal()`
+
+Returns the global store instance.
+
+```jsx
+const store = useVglobal();
+```
+
+### `vGrip(Component)`
+
+Higher-order component that adds fine-grained reactivity. Component only re-renders when accessed properties change.
+
+```jsx
+const OptimizedComponent = vGrip(({ data }) => {
+  return <div>{data.value}</div>;
 });
 ```
 
-## Philosophy
+### `vAction(fn)`
 
-Vorthain prioritizes **developer experience over performance optimization**. The core principles are:
+Batches multiple mutations into a single re-render.
 
-- Most apps don't need surgical re-renders
-- Simple, readable code prevents more bugs than complex optimizations
-- Developer productivity matters more than milliseconds
-- You can always optimize later if needed
+```jsx
+vAction(() => {
+  state.a = 1;
+  state.b = 2;
+  state.c = 3;
+});
+```
 
-If you disagree with these priorities, consider using [Zustand](https://github.com/pmndrs/zustand), [Jotai](https://jotai.org/), or [Redux Toolkit](https://redux-toolkit.js.org/) instead.
+## Common Patterns
 
-## Why Vorthain?
+### Cross-Store Communication
 
-- **🎯 Zero Boilerplate** - No actions, reducers, or dispatch calls
-- **🔄 Automatic Updates** - Components re-render when state changes
-- **🧠 Natural** - Write code in a sane way
-- **🔧 TypeScript** - Full type safety with zero configuration
-- **⚡ Simple** - Focus on business logic, not state management patterns
+```jsx
+// For JavaScript with autocomplete
+class TodoStore {
+  /** @param {RootStore} rootStore */
+  constructor(rootStore) {
+    this.rootStore = rootStore;
+    this.todos = [];
+  }
+  
+  addTodo = (text) => {
+    this.todos.push({ text, done: false });
+    // Access other stores with full autocomplete
+    this.rootStore.uiStore.showNotification('Todo added!');
+    this.rootStore.analyticsStore.track('todo_added');
+  }
+}
+
+class RootStore {
+  constructor() {
+    this.todoStore = new TodoStore(this);
+    this.uiStore = new UIStore(this);
+    this.analyticsStore = new AnalyticsStore(this);
+  }
+}
+```
+
+### Async Actions
+
+```jsx
+const state = useVstate({
+  data: null,
+  loading: false,
+  error: null,
+  
+  async fetchData() {
+    state.loading = true;
+    state.error = null;
+    
+    try {
+      const response = await fetch('/api/data');
+      state.data = await response.json();
+    } catch (err) {
+      state.error = err.message;
+    } finally {
+      state.loading = false;
+    }
+  }
+});
+```
+
+### Computed Values with Parameters
+
+```jsx
+const state = useVstate({
+  todos: [],
+  
+  // Use a method instead of getter for parameterized computed values
+  getTodosByPriority(priority) {
+    return state.todos.filter(t => t.priority === priority);
+  },
+  
+  // Can still use getters for simple computed values
+  get highPriorityCount() {
+    return state.getTodosByPriority('high').length;
+  }
+});
+```
+
+### Combining Local and Global State
+
+```jsx
+function TodoEditor() {
+  const store = useVglobal();
+  const state = useVstate({
+    editingId: null,
+    tempText: '',
+    
+    startEdit(todo) {
+      state.editingId = todo.id;
+      state.tempText = todo.text;
+    },
+    
+    saveEdit() {
+      const todo = store.todos.find(t => t.id === state.editingId);
+      if (todo) {
+        todo.text = state.tempText;
+        state.editingId = null;
+      }
+    },
+    
+    get isEditing() {
+      return state.editingId !== null;
+    }
+  });
+
+  return (
+    <div>
+      {store.todos.map(todo => (
+        <div key={todo.id}>
+          {state.editingId === todo.id ? (
+            <input 
+              value={state.tempText}
+              onChange={e => state.tempText = e.target.value}
+              onBlur={state.saveEdit}
+            />
+          ) : (
+            <span onClick={() => state.startEdit(todo)}>
+              {todo.text}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
 
 ---
 
 **Ready to simplify your state management?**
 
 ```bash
-npm install vorthain-react-state
+npm install @vorthain/react-state
 ```
+
+---
+## How It Works
+<small>
+The magic behind `@vorthain/react-state` is a system of **ES6 Proxies** that wraps your state objects. This allows the library to intercept property access and mutations without requiring you to use special functions or immutable patterns.
+
+* **Dependency Tracking**: When your component renders, every property of the state object you access (e.g., `state.count`) is recorded. The `get` trap of the Proxy registers the component as a "subscriber" to that specific property. For computed properties (getters), it tracks all the underlying properties they access, creating a dependency graph.
+
+* **Automatic Updates**: When you mutate a property (e.g., `state.count++`), the Proxy's `set` trap is triggered. It looks up all the components that subscribed to that property and queues them for a re-render. This process is highly efficient because only the components that actually depend on the changed data are updated.
+
+* **Data Structure Support**: The library uses specialized Proxy handlers to support various data structures, ensuring reactivity is preserved everywhere:
+    * **Objects**: Plain objects are deeply wrapped in Proxies. Any change to a nested property (e.g., `state.user.preferences.theme = 'dark'`) will trigger an update.
+    * **Arrays**: Methods that mutate arrays (`push`, `pop`, `splice`, etc.) are intercepted. Calling `state.items.push(newItem)` notifies subscribers of both the new item and the array's `length` property.
+    * **Maps & Sets**: Methods like `set`, `add`, `delete`, and `clear` are also proxied. Changing a Map or Set will correctly trigger updates for components that iterate over them or access their `size`.
+
+* **Fine-Grained Rendering (`vGrip`)**: The `vGrip` HOC enhances this by creating a dedicated tracker for each wrapped component. Instead of the entire component subscribing to state changes, `vGrip` tracks dependencies *during the render phase* and ensures the component only re-renders if the exact data it used has changed.
+
+* **Update Batching (`vAction`)**: To prevent multiple, rapid-fire re-renders from a series of mutations, `vAction` wraps them in a batch. It collects all notifications and then triggers a single, consolidated re-render at the end of the action.
+</small>

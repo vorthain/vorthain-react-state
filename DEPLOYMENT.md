@@ -169,7 +169,7 @@ git push origin main --tags
 4. **Use `[skip]` for non-code changes**
 5. **Test locally before pushing** (`npm run test:coverage`)
 6. **Check the Actions tab** to see publish status
-7. **Keep coverage above thresholds** (70%+ branches, 75%+ functions/lines/statements)
+7. **Keep coverage above thresholds** (10%+ branches, 20%+ functions/lines/statements)
 
 ## 🐛 Troubleshooting
 

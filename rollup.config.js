@@ -16,6 +16,7 @@ export default {
       sourcemap: true
     }
   ],
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
   plugins: [
     peerDepsExternal(),
     resolve(),

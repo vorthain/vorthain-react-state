@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createVorthainStore, useVglobal, useVstate, vAction } from '../src/index';
+import { createVorthainStore, useVglobal, useVstate, vAction, vGrip } from '../src/index.ts';
 import { RootStore } from './vstore/RootStore';
 
 createVorthainStore(RootStore);
@@ -100,7 +100,7 @@ const KeywordManager = ({ todoIndex }: { todoIndex: number }) => {
           <input
             value={state.newKeyword}
             onChange={(e) => (state.newKeyword = e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && addKeyword()}
+            onKeyDown={(e) => e.key === 'Enter' && addKeyword()}
             placeholder="Enter keyword..."
             autoFocus
           />
@@ -696,10 +696,8 @@ const LargeDatasetPagination = () => {
     simulateFetch: async () => {
       state.isFetching = true;
 
-      // Simulate network delay
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      // Generate 2000 items using vAction for optimal performance
       vAction(() => {
         state.items = Array.from({ length: 2000 }, (_, index) => ({
           id: index + 1,
@@ -848,7 +846,7 @@ const LargeDatasetPagination = () => {
                 min="1"
                 max={state.totalPages}
                 style={{ width: '60px', padding: '2px 5px' }}
-                onKeyPress={(e) => {
+                onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     const page = parseInt((e.target as HTMLInputElement).value) - 1;
                     state.goToPage(page);
@@ -883,7 +881,7 @@ const LargeDatasetPagination = () => {
                         <input
                           value={state.editingName}
                           onChange={(e) => (state.editingName = e.target.value)}
-                          onKeyPress={(e) => {
+                          onKeyDown={(e) => {
                             if (e.key === 'Enter') state.saveEdit();
                             if (e.key === 'Escape') state.cancelEdit();
                           }}
@@ -1000,7 +998,7 @@ const LargeDatasetPagination = () => {
 
 // ===================== EDGE CASE 1: DEEPLY NESTED CROSS-BOUNDARY GETTER =====================
 const DeepCrossBoundaryGetter = () => {
-  const store = useAppStore();
+  const { todoStore } = useAppStore();
   const state = useVstate({
     prefix: '🔗',
     multiplier: 2,
@@ -1010,7 +1008,7 @@ const DeepCrossBoundaryGetter = () => {
       return (
         state.prefix +
         ' ' +
-        store.todoStore.todos
+        todoStore.todos
           .map((todo) => `${todo.name}[${todo.nested.keywords.join(',')}]`)
           .join(' | ') +
         ` (×${state.multiplier})`
@@ -1019,13 +1017,13 @@ const DeepCrossBoundaryGetter = () => {
 
     // Getter that calculates from nested numbers
     get nestedNumbersSum() {
-      const sum = store.todoStore.todos.reduce((acc, todo) => acc + todo.nested.someNumber, 0);
+      const sum = todoStore.todos.reduce((acc, todo) => acc + todo.nested.someNumber, 0);
       return sum * state.multiplier;
     },
 
     // Super complex getter mixing local and store state
     get complexCalculation() {
-      const completedKeywords = store.todoStore.todos
+      const completedKeywords = todoStore.todos
         .filter((todo) => todo.toggled)
         .flatMap((todo) => todo.nested.keywords)
         .filter((keyword, index, arr) => arr.indexOf(keyword) === index); // unique
@@ -1079,21 +1077,21 @@ const DeepCrossBoundaryGetter = () => {
       <div style={{ marginBottom: '10px' }}>
         <strong>Quick Test Actions:</strong>
         <br />
-        <button onClick={() => store.todoStore.addTodo('Test Deep Reactivity', 'high')}>
+        <button onClick={() => todoStore.addTodo('Test Deep Reactivity', 'high')}>
           Add Todo (Should Update All Getters)
         </button>
         <button
           onClick={() => {
-            if (store.todoStore.todos.length > 0) {
-              store.todoStore.todos[0].nested.keywords.push(`keyword-${Date.now()}`);
+            if (todoStore.todos.length > 0) {
+              todoStore.todos[0].nested.keywords.push(`keyword-${Date.now()}`);
             }
           }}>
           Add Keyword to First Todo
         </button>
         <button
           onClick={() => {
-            if (store.todoStore.todos.length > 0) {
-              store.todoStore.todos[0].nested.someNumber = Math.floor(Math.random() * 1000);
+            if (todoStore.todos.length > 0) {
+              todoStore.todos[0].nested.someNumber = Math.floor(Math.random() * 1000);
             }
           }}>
           Randomize First Todo Number
@@ -1679,5 +1677,9 @@ const App = () => {
 const container = document.getElementById('root');
 if (container) {
   const root = createRoot(container);
-  root.render(<App />);
+  root.render(
+    // <React.StrictMode>
+    <App />
+    // </React.StrictMode>
+  );
 }

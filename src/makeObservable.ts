@@ -1,81 +1,87 @@
-import { useReducer, useEffect } from 'react';
+import { useReducer, useEffect, useRef } from 'react';
 
-// Track which component is currently rendering
 let currentComponent: (() => void) | null = null;
-
-// SIMPLIFIED SUBSCRIPTION SYSTEM
-// Property-level subscriptions: property key -> Set of components
 const propertySubscriptions = new Map<string, Set<() => void>>();
-
-// Use WeakMap with cleanup registry to prevent memory leaks
-const componentCollectionInterests = new WeakMap<() => void, Set<object>>();
-const activeComponents = new Set<() => void>();
-
-// Track component cleanup functions to prevent memory leaks
-const componentCleanupFns = new WeakMap<() => void, () => void>();
-
-// Track already processed objects to prevent infinite recursion
-const observableCache = new WeakMap<object, object>();
-
-// Object ID system for creating unique property keys - BigInt for unlimited scale
-let nextObjectId = BigInt(1);
-const objectIds = new WeakMap<object, bigint>();
-
-// Track live components to prevent updates to unmounted components
 const liveComponents = new WeakSet<() => void>();
-
-// Computed property dependency tracking - use Maps for iteration
+const observableCache = new WeakMap<object, object>();
+let objectIdCounter = 1;
+const objectIds = new WeakMap<object, number>();
 const computedDependencies = new Map<object, Map<string | symbol, Set<string>>>();
 const computedCache = new Map<object, Map<string | symbol, { value: any; isValid: boolean }>>();
-
-// Batch update system for vAction - prevents multiple re-renders
 let isBatching = false;
 let batchedUpdates = new Set<() => void>();
 
-// Collection methods that need patching
-const ARRAY_METHODS = [
-  'push',
-  'pop',
-  'shift',
-  'unshift',
-  'splice',
-  'sort',
-  'reverse',
-  'fill',
-  'copyWithin'
-];
-const MAP_METHODS = ['set', 'delete', 'clear'];
-const SET_METHODS = ['add', 'delete', 'clear'];
+let vGripNotifier: ((obj: object, prop: string | symbol) => void) | null = null;
+let vGripBatchStartFn: (() => void) | null = null;
+let vGripBatchEndFn: (() => void) | null = null;
+let vGripGetCurrentTracker: (() => any) | null = null;
+let vGripTrackDependency:
+  | ((tracker: any, obj: object, prop: string | symbol, value: any) => void)
+  | null = null;
 
-/**
- * Batch multiple reactive updates into a single render cycle
- * Perfect for loops, bulk operations, or complex state changes
- */
+export function registerVGripNotifier(notifier: (obj: object, prop: string | symbol) => void) {
+  vGripNotifier = notifier;
+}
+
+export function registerVGripBatchHandlers(startFn: () => void, endFn: () => void) {
+  vGripBatchStartFn = startFn;
+  vGripBatchEndFn = endFn;
+}
+
+export function registerVGripTracking(
+  getCurrentTracker: () => any,
+  trackDependency: (tracker: any, obj: object, prop: string | symbol, value: any) => void
+) {
+  vGripGetCurrentTracker = getCurrentTracker;
+  vGripTrackDependency = trackDependency;
+}
+
+function getObjectId(obj: object): number {
+  if (!objectIds.has(obj)) {
+    objectIds.set(obj, objectIdCounter++);
+  }
+  return objectIds.get(obj)!;
+}
+
+function getPropertyKey(target: object, prop: string | symbol): string {
+  return `${getObjectId(target)}:${String(prop)}`;
+}
+
+function isObservable(obj: any): boolean {
+  return obj && typeof obj === 'object' && obj.__vorthainReactive === true;
+}
+
 export function vAction<T>(actionFn: () => T): T {
   if (isBatching) {
-    // If already batching, just execute the function
     return actionFn();
   }
 
   isBatching = true;
   batchedUpdates.clear();
 
+  if (vGripBatchStartFn) {
+    vGripBatchStartFn();
+  }
+
   try {
     const result = actionFn();
 
-    // Execute all batched updates in next microtask
-    if (batchedUpdates.size > 0) {
+    if (batchedUpdates.size > 0 || vGripBatchEndFn) {
       queueMicrotask(() => {
         batchedUpdates.forEach((updateFn) => {
           if (liveComponents.has(updateFn)) {
             try {
               updateFn();
             } catch (e) {
-              console.error('Error in batched component update:', e);
+              console.error('Error in batched update:', e);
             }
           }
         });
         batchedUpdates.clear();
+
+        if (vGripBatchEndFn) {
+          vGripBatchEndFn();
+        }
       });
     }
 
@@ -85,144 +91,13 @@ export function vAction<T>(actionFn: () => T): T {
   }
 }
 
-// PERFORMANCE OPTIMIZATIONS FOR LARGE DATASETS
-
-// Lazy reactivity - only make objects reactive when actually accessed by components
-const lazyReactiveCache = new WeakMap<object, object>();
-const isBeingAccessed = new WeakSet<object>();
-
-// Optimized subscription tracking - only track what's actually being used
-const activeSubscriptions = new WeakMap<object, Set<() => void>>();
-const subscriptionQueue = new Set<() => void>();
-
-// Batch notification system - collect all updates and flush once
-let notificationBatch = new Set<string>();
-let isFlushingNotifications = false;
-
-// Optimized property key generation - use simple counter instead of BigInt
-let simpleIdCounter = 1;
-const objectSimpleIds = new WeakMap<object, number>();
-
-function getOptimizedObjectId(obj: object): number {
-  if (!objectSimpleIds.has(obj)) {
-    objectSimpleIds.set(obj, simpleIdCounter++);
-  }
-  return objectSimpleIds.get(obj)!;
-}
-
-function getOptimizedPropertyKey(target: object, prop: string | symbol): string {
-  return `${getOptimizedObjectId(target)}:${String(prop)}`;
-}
-
-// OPTIMIZED: Batch notifications for better performance
-function flushNotifications() {
-  if (isFlushingNotifications || notificationBatch.size === 0) return;
-
-  isFlushingNotifications = true;
-
-  // Process all batched notifications at once
-  const notificationsToProcess = Array.from(notificationBatch);
-  notificationBatch.clear();
-
-  const componentsToUpdate = new Set<() => void>();
-
-  notificationsToProcess.forEach((propKey) => {
-    const subscribers = propertySubscriptions.get(propKey);
-    if (subscribers) {
-      subscribers.forEach((subscriber) => {
-        if (liveComponents.has(subscriber)) {
-          componentsToUpdate.add(subscriber);
-        }
-      });
-    }
-  });
-
-  // Update all components in one batch
-  if (componentsToUpdate.size > 0) {
-    if (isBatching) {
-      componentsToUpdate.forEach((fn) => batchedUpdates.add(fn));
-    } else {
-      requestAnimationFrame(() => {
-        componentsToUpdate.forEach((updateFn) => {
-          if (liveComponents.has(updateFn)) {
-            try {
-              updateFn();
-            } catch (e) {
-              console.error('Error in optimized update:', e);
-            }
-          }
-        });
-      });
-    }
-  }
-
-  isFlushingNotifications = false;
-}
-
-// OPTIMIZED: Queue notifications instead of immediate processing
-function queueNotification(propKey: string) {
-  notificationBatch.add(propKey);
-
-  // Flush on next microtask
-  if (!isFlushingNotifications) {
-    queueMicrotask(flushNotifications);
-  }
-}
-
-// Safe update execution with batching support and performance optimization
-function safeUpdateComponent(updateFn: () => void) {
-  // Only update if component is still live
-  if (liveComponents.has(updateFn)) {
-    if (isBatching) {
-      // Add to batch instead of immediate execution
-      batchedUpdates.add(updateFn);
-    } else {
-      // Use requestAnimationFrame for better performance with many updates
-      requestAnimationFrame(() => {
-        // Double-check liveness before executing
-        if (liveComponents.has(updateFn)) {
-          try {
-            updateFn();
-          } catch (e) {
-            console.error('Error in component update:', e);
-          }
-        }
-      });
-    }
-  }
-}
-
-// OPTIMIZED: Lightweight notification system
-function notifySubscribers(propKey: string) {
-  // Just queue the notification instead of processing immediately
-  queueNotification(propKey);
-}
-
-// Invalidate computed properties that depend on a specific property
-function invalidateComputedsThatDependOn(propKey: string) {
-  computedCache.forEach((cache, target) => {
-    cache.forEach((cacheEntry, computedProp) => {
-      const deps = computedDependencies.get(target)?.get(computedProp);
-      if (deps && deps.has(propKey)) {
-        cacheEntry.isValid = false;
-      }
-    });
-  });
-}
-
-// OPTIMIZED: Lazy reactive object creation - only make objects reactive when needed
 export function makeObservable<T extends object>(target: T): T {
   if (!target || typeof target !== 'object') return target;
-
-  // Check if already reactive
   if ((target as any).__vorthainReactive) return target;
-
-  // Check lazy cache first
-  if (lazyReactiveCache.has(target)) {
-    return lazyReactiveCache.get(target) as T;
+  if (observableCache.has(target)) {
+    return observableCache.get(target) as T;
   }
 
-  // Don't make these objects reactive
   if (
     target instanceof Date ||
     target instanceof RegExp ||
@@ -238,130 +113,20 @@ export function makeObservable<T extends object>(target: T): T {
     return target;
   }
 
-  // OPTIMIZATION: For large arrays, use lightweight reactive approach
-  if (Array.isArray(target) && target.length > 100) {
-    return makeLightweightArrayObservable(target) as T;
-  }
-
-  // Set cache BEFORE processing to prevent recursion
   observableCache.set(target, target);
 
-  let observable: T;
-
   if (Array.isArray(target)) {
-    observable = makeArrayObservable(target);
+    return makeArrayObservable(target);
   } else if (target instanceof Map) {
-    observable = makeMapObservable(target);
+    return makeMapObservable(target);
   } else if (target instanceof Set) {
-    observable = makeSetObservable(target);
+    return makeSetObservable(target);
   } else {
-    observable = makeObjectObservable(target);
+    return makeObjectObservable(target);
   }
-
-  return observable;
-}
-
-// OPTIMIZED: Lightweight array reactivity for large datasets
-function makeLightweightArrayObservable<T extends any[]>(target: T): T {
-  // Mark as reactive
-  Object.defineProperty(target, '__vorthainReactive', {
-    value: true,
-    writable: false,
-    enumerable: false,
-    configurable: false
-  });
-
-  // DON'T make all items reactive immediately - too expensive
-  // Only make items reactive when they're actually accessed by components
-
-  // Create lightweight proxy that only tracks array-level operations
-  const arrayProxy = new Proxy(target, {
-    get(target, prop, receiver) {
-      // Only track array-level properties for components
-      if (
-        currentComponent &&
-        (prop === 'length' || prop === 'push' || prop === 'splice' || typeof prop === 'number')
-      ) {
-        const propKey = getOptimizedPropertyKey(target, 'array-access');
-        let subscribers = propertySubscriptions.get(propKey);
-        if (!subscribers) {
-          subscribers = new Set();
-          propertySubscriptions.set(propKey, subscribers);
-        }
-        subscribers.add(currentComponent);
-      }
-
-      const value = Reflect.get(target, prop, receiver);
-
-      // LAZY REACTIVITY: Only make items reactive when accessed by components
-      if (
-        currentComponent &&
-        typeof prop === 'number' &&
-        value &&
-        typeof value === 'object' &&
-        !isObservable(value)
-      ) {
-        const reactiveItem = makeObservable(value);
-        target[prop as any] = reactiveItem;
-        return reactiveItem;
-      }
-
-      return value;
-    },
-
-    set(target, prop, value, receiver) {
-      if (prop === 'length') {
-        const oldLength = target.length;
-        const newLength = Number(value);
-
-        if (newLength < oldLength) {
-          target.splice(newLength);
-        } else if (newLength > oldLength) {
-          target.length = newLength;
-        }
-
-        // Lightweight notification
-        const propKey = getOptimizedPropertyKey(target, 'array-access');
-        queueNotification(propKey);
-
-        return true;
-      }
-
-      if (typeof prop === 'string' || typeof prop === 'symbol') {
-        const result = Reflect.set(target, prop, value, receiver);
-
-        // Lightweight notification for array changes
-        const propKey = getOptimizedPropertyKey(target, 'array-access');
-        queueNotification(propKey);
-
-        return result;
-      }
-
-      return Reflect.set(target, prop, value, receiver);
-    }
-  });
-
-  // Patch only essential array methods with lightweight notifications
-  ['push', 'pop', 'shift', 'unshift', 'splice'].forEach((method) => {
-    const original = target[method as keyof T];
-    if (typeof original !== 'function') return;
-
-    (arrayProxy as any)[method] = function (...args: any[]) {
-      const result = original.apply(this, args);
-
-      // Single lightweight notification for array changes
-      const propKey = getOptimizedPropertyKey(this, 'array-access');
-      queueNotification(propKey);
-
-      return result;
-    };
-  });
-
-  return arrayProxy as T;
 }
 
 function makeObjectObservable<T extends object>(target: T): T {
-  // Mark as reactive
   Object.defineProperty(target, '__vorthainReactive', {
     value: true,
     writable: false,
@@ -374,7 +139,6 @@ function makeObjectObservable<T extends object>(target: T): T {
     ...Object.getOwnPropertySymbols(target)
   ]);
 
-  // Convert each property to reactive
   allProps.forEach((prop) => {
     if (prop === '__vorthainReactive') return;
 
@@ -384,33 +148,14 @@ function makeObjectObservable<T extends object>(target: T): T {
     if (descriptor.get || descriptor.set) {
       makeGetterSetterReactive(target, prop, descriptor);
     } else {
+      if (descriptor.value && typeof descriptor.value === 'object') {
+        descriptor.value = makeObservable(descriptor.value);
+      }
       makePropertyReactive(target, prop, descriptor.value);
     }
   });
 
   return target;
-}
-
-// Track every single property access during computed execution
-let accessedPropertiesDuringComputed = new Set<string>();
-
-// Universal computed invalidation for ANY collection change
-function invalidateComputedsThatDependOnObject(objectId: string) {
-  computedCache.forEach((cache, target) => {
-    cache.forEach((cacheEntry, computedProp) => {
-      const deps = computedDependencies.get(target)?.get(computedProp);
-      if (deps) {
-        // Check if this computed depends on this object (by object ID)
-        const dependsOnThisObject = Array.from(deps).some(
-          (depKey) => depKey.startsWith(objectId + ':') || depKey === objectId
-        );
-
-        if (dependsOnThisObject) {
-          cacheEntry.isValid = false;
-        }
-      }
-    });
-  });
 }
 
 function makePropertyReactive(target: any, prop: string | symbol, initialValue: any) {
@@ -422,10 +167,9 @@ function makePropertyReactive(target: any, prop: string | symbol, initialValue: 
 
   Object.defineProperty(target, prop, {
     get() {
-      const propKey = getOptimizedPropertyKey(target, prop);
+      const propKey = getPropertyKey(target, prop);
 
-      // Track access to this specific property
-      if (currentComponent) {
+      if (currentComponent && !vGripGetCurrentTracker?.()) {
         let subscribers = propertySubscriptions.get(propKey);
         if (!subscribers) {
           subscribers = new Set();
@@ -434,16 +178,15 @@ function makePropertyReactive(target: any, prop: string | symbol, initialValue: 
         subscribers.add(currentComponent);
       }
 
-      // Track ALL property accesses during computed execution
-      if (currentComputedContext) {
-        accessedPropertiesDuringComputed.add(propKey);
+      if (vGripGetCurrentTracker && vGripTrackDependency) {
+        const tracker = vGripGetCurrentTracker();
+        if (tracker && tracker.isRendering) {
+          vGripTrackDependency(tracker, target, prop, currentValue);
+        }
       }
 
-      // Track dependency for computed properties
-      trackComputedDependency(propKey);
-
-      if (currentValue && typeof currentValue === 'object' && !isObservable(currentValue)) {
-        currentValue = makeObservable(currentValue);
+      if (currentComputedContext) {
+        trackComputedDependency(propKey);
       }
 
       return currentValue;
@@ -456,17 +199,16 @@ function makePropertyReactive(target: any, prop: string | symbol, initialValue: 
         newValue = makeObservable(newValue);
       }
 
-      const oldValue = currentValue;
       currentValue = newValue;
 
-      const propKey = getOptimizedPropertyKey(target, prop);
+      invalidateComputedsThatDependOn(target, prop);
 
-      // When ANY property changes, invalidate ALL computeds that depend on this object
-      const objectId = String(getOptimizedObjectId(target));
-      invalidateComputedsThatDependOnObject(objectId);
+      const propKey = getPropertyKey(target, prop);
+      notifySubscribers(propKey);
 
-      // Use optimized notification
-      queueNotification(propKey);
+      if (vGripNotifier) {
+        vGripNotifier(target, prop);
+      }
     },
 
     enumerable: true,
@@ -474,24 +216,51 @@ function makePropertyReactive(target: any, prop: string | symbol, initialValue: 
   });
 }
 
-// Track computed dependencies during getter execution
 let currentComputedContext: { target: object; prop: string | symbol } | null = null;
 
 function trackComputedDependency(propKey: string) {
-  if (currentComputedContext) {
-    const { target, prop } = currentComputedContext;
+  if (!currentComputedContext) return;
 
-    if (!computedDependencies.has(target)) {
-      computedDependencies.set(target, new Map());
-    }
+  const { target, prop } = currentComputedContext;
 
-    const targetDeps = computedDependencies.get(target)!;
-    if (!targetDeps.has(prop)) {
-      targetDeps.set(prop, new Set());
-    }
-
-    targetDeps.get(prop)!.add(propKey);
+  if (!computedDependencies.has(target)) {
+    computedDependencies.set(target, new Map());
   }
+
+  const targetDeps = computedDependencies.get(target)!;
+  if (!targetDeps.has(prop)) {
+    targetDeps.set(prop, new Set());
+  }
+
+  targetDeps.get(prop)!.add(propKey);
+}
+
+function invalidateComputedsThatDependOn(obj: object, prop: string | symbol) {
+  const propKey = getPropertyKey(obj, prop);
+
+  computedCache.forEach((cache, target) => {
+    cache.forEach((cacheEntry, computedProp) => {
+      const deps = computedDependencies.get(target)?.get(computedProp);
+      if (deps && deps.has(propKey)) {
+        const oldValue = cacheEntry.value;
+        cacheEntry.isValid = false;
+
+        if (vGripNotifier) {
+          const descriptor = Object.getOwnPropertyDescriptor(target, computedProp);
+          if (descriptor && descriptor.get) {
+            try {
+              const newValue = descriptor.get.call(target);
+              if (newValue !== oldValue) {
+                vGripNotifier(target, computedProp);
+              }
+            } catch (e) {
+              vGripNotifier(target, computedProp);
+            }
+          }
+        }
+      }
+    });
+  });
 }
 
 function makeGetterSetterReactive(
@@ -504,9 +273,10 @@ function makeGetterSetterReactive(
 
   Object.defineProperty(target, prop, {
     get() {
-      // Track access to the computed property itself
-      if (currentComponent) {
-        const propKey = getOptimizedPropertyKey(target, prop);
+      if (!originalGet) return undefined;
+
+      if (currentComponent && !vGripGetCurrentTracker?.()) {
+        const propKey = getPropertyKey(target, prop);
         let subscribers = propertySubscriptions.get(propKey);
         if (!subscribers) {
           subscribers = new Set();
@@ -515,75 +285,74 @@ function makeGetterSetterReactive(
         subscribers.add(currentComponent);
       }
 
-      if (originalGet) {
-        // Smart caching for computed properties
-        if (!computedCache.has(target)) {
-          computedCache.set(target, new Map());
+      if (!computedCache.has(target)) {
+        computedCache.set(target, new Map());
+      }
+
+      const cache = computedCache.get(target)!;
+      if (!cache.has(prop)) {
+        cache.set(prop, { value: undefined, isValid: false });
+      }
+
+      const cacheEntry = cache.get(prop)!;
+      const tracker = vGripGetCurrentTracker?.();
+      const shouldUseCache = cacheEntry.isValid && !currentComponent && !tracker;
+
+      if (shouldUseCache) {
+        return cacheEntry.value;
+      }
+
+      const prevComponent = currentComponent;
+      const prevComputedContext = currentComputedContext;
+      currentComputedContext = { target, prop };
+
+      const computedNotifier = () => {
+        const propKey = getPropertyKey(target, prop);
+        notifySubscribers(propKey);
+      };
+
+      if (!tracker) {
+        currentComponent = computedNotifier;
+      }
+
+      try {
+        const result = originalGet.call(target);
+
+        cacheEntry.value = result;
+        cacheEntry.isValid = true;
+
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, prop, result);
         }
 
-        const cache = computedCache.get(target)!;
-        if (!cache.has(prop)) {
-          cache.set(prop, { value: undefined, isValid: false });
-        }
-
-        const cacheEntry = cache.get(prop)!;
-
-        // Don't use cache for cross-boundary getters - always re-execute to get fresh values
-        const shouldUseCache = cacheEntry.isValid && !currentComponent;
-
-        if (shouldUseCache) {
-          return cacheEntry.value;
-        }
-
-        const prevComponent = currentComponent;
-        const prevComputedContext = currentComputedContext;
-
-        // Set up computed dependency tracking
-        currentComputedContext = { target, prop };
-
-        const dependencyNotifier = () => {
-          const propKey = getOptimizedPropertyKey(target, prop);
-          queueNotification(propKey);
-        };
-
-        currentComponent = dependencyNotifier;
-
-        try {
-          const result = originalGet.call(this);
-
-          // Always cache the result
-          cacheEntry.value = result;
-          cacheEntry.isValid = true;
-
-          if (result && typeof result === 'object' && !isObservable(result)) {
-            const observableResult = makeObservable(result);
-            cacheEntry.value = observableResult;
-            return observableResult;
-          }
-
-          return result;
-        } finally {
+        return result;
+      } finally {
+        if (!tracker) {
           currentComponent = prevComponent;
-          currentComputedContext = prevComputedContext;
         }
+        currentComputedContext = prevComputedContext;
       }
     },
 
     set(newValue) {
-      if (originalSet) {
-        if (newValue && typeof newValue === 'object') {
-          newValue = makeObservable(newValue);
-        }
-        originalSet.call(this, newValue);
+      if (!originalSet) return;
 
-        // Invalidate cache
-        const cache = computedCache.get(target);
-        if (cache && cache.has(prop)) {
-          cache.get(prop)!.isValid = false;
-        }
+      if (newValue && typeof newValue === 'object') {
+        newValue = makeObservable(newValue);
+      }
 
-        const propKey = getOptimizedPropertyKey(target, prop);
-        queueNotification(propKey);
+      originalSet.call(target, newValue);
+
+      const cache = computedCache.get(target);
+      if (cache && cache.has(prop)) {
+        cache.get(prop)!.isValid = false;
+      }
+
+      const propKey = getPropertyKey(target, prop);
+      notifySubscribers(propKey);
+
+      if (vGripNotifier) {
+        vGripNotifier(target, prop);
       }
     },
 
@@ -592,8 +361,19 @@ function makeGetterSetterReactive(
   });
 }
 
+const ARRAY_METHODS = [
+  'push',
+  'pop',
+  'shift',
+  'unshift',
+  'splice',
+  'sort',
+  'reverse',
+  'fill',
+  'copyWithin'
+];
+
 function makeArrayObservable<T extends any[]>(target: T): T {
-  // Mark as reactive
   Object.defineProperty(target, '__vorthainReactive', {
     value: true,
     writable: false,
@@ -601,25 +381,118 @@ function makeArrayObservable<T extends any[]>(target: T): T {
     configurable: false
   });
 
-  // Make all existing items reactive immediately
   for (let i = 0; i < target.length; i++) {
     if (target[i] && typeof target[i] === 'object' && !isObservable(target[i])) {
       target[i] = makeObservable(target[i]);
     }
   }
 
-  // Create proxy to intercept array operations including length setter
+  const originalMethods: Record<string, Function> = {};
+  ARRAY_METHODS.forEach((method) => {
+    const fn = target[method as keyof T];
+    if (typeof fn === 'function') {
+      originalMethods[method] = fn.bind(target);
+    }
+  });
+
   const arrayProxy = new Proxy(target, {
     get(target, prop, receiver) {
-      // Track property access for reactivity
-      if (currentComponent) {
-        const propKey = getOptimizedPropertyKey(target, prop);
+      if (typeof prop === 'string' && ARRAY_METHODS.includes(prop)) {
+        return function (this: any, ...args: any[]) {
+          const oldLength = target.length;
+          const oldItems = [...target];
+
+          let processedArgs = args;
+          if (prop === 'push' || prop === 'unshift') {
+            processedArgs = args.map((item) =>
+              item && typeof item === 'object' ? makeObservable(item) : item
+            );
+          } else if (prop === 'splice' && args.length > 2) {
+            processedArgs = [...args];
+            for (let i = 2; i < processedArgs.length; i++) {
+              if (processedArgs[i] && typeof processedArgs[i] === 'object') {
+                processedArgs[i] = makeObservable(processedArgs[i]);
+              }
+            }
+          }
+
+          const result = originalMethods[prop].apply(target, processedArgs);
+
+          for (let i = 0; i < target.length; i++) {
+            if (target[i] && typeof target[i] === 'object' && !isObservable(target[i])) {
+              target[i] = makeObservable(target[i]);
+            }
+          }
+
+          const lengthChanged = target.length !== oldLength;
+          const itemsChanged = !oldItems.every((item, i) => target[i] === item);
+
+          if (lengthChanged) {
+            const lengthKey = getPropertyKey(target, 'length');
+            notifySubscribers(lengthKey);
+          }
+
+          if (vGripNotifier) {
+            if (lengthChanged) {
+              vGripNotifier(target, 'length');
+            }
+
+            if (itemsChanged || ['sort', 'reverse'].includes(prop)) {
+              const maxLength = Math.max(target.length, oldLength);
+              for (let i = 0; i < maxLength; i++) {
+                if (i >= target.length || i >= oldItems.length || target[i] !== oldItems[i]) {
+                  vGripNotifier(target, i.toString());
+                }
+              }
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (typeof prop === 'string' && !isNaN(Number(prop))) {
+        const index = Number(prop);
+        let item = target[index];
+
+        if (item && typeof item === 'object' && !isObservable(item)) {
+          item = makeObservable(item);
+          target[index] = item;
+        }
+
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, prop);
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, prop, item);
+        }
+
+        return item;
+      }
+
+      if (currentComponent && !vGripGetCurrentTracker?.()) {
+        const propKey = getPropertyKey(target, prop);
         let subscribers = propertySubscriptions.get(propKey);
         if (!subscribers) {
           subscribers = new Set();
           propertySubscriptions.set(propKey, subscribers);
         }
         subscribers.add(currentComponent);
+      }
+
+      const tracker = vGripGetCurrentTracker?.();
+      if (tracker && tracker.isRendering && vGripTrackDependency) {
+        const value = Reflect.get(target, prop, receiver);
+        vGripTrackDependency(tracker, target, prop, value);
+        return value;
       }
 
       return Reflect.get(target, prop, receiver);
@@ -630,317 +503,644 @@ function makeArrayObservable<T extends any[]>(target: T): T {
         const oldLength = target.length;
         const newLength = Number(value);
 
-        // Handle array truncation (including length = 0)
         if (newLength < oldLength) {
-          // Remove elements from the end using splice to trigger reactivity
-          target.splice(newLength);
-        } else if (newLength > oldLength) {
-          // Extend array with undefined values
-          target.length = newLength;
+          for (let i = newLength; i < oldLength; i++) {
+            delete target[i];
+          }
         }
 
-        // Notify length subscribers
-        const lengthPropKey = getOptimizedPropertyKey(target, 'length');
-        queueNotification(lengthPropKey);
+        target.length = newLength;
 
-        // Notify all array subscribers about the change
-        notifyArraySubscribers(target, oldLength);
+        const propKey = getPropertyKey(target, 'length');
+        notifySubscribers(propKey);
+
+        if (vGripNotifier) {
+          vGripNotifier(target, 'length');
+          for (let i = newLength; i < oldLength; i++) {
+            vGripNotifier(target, i.toString());
+          }
+        }
 
         return true;
       }
 
-      // Handle regular property setting
-      if (typeof prop === 'string' || typeof prop === 'symbol') {
-        const oldValue = target[prop as any];
-
-        // Make new value reactive if it's an object
-        if (value && typeof value === 'object') {
-          value = makeObservable(value);
-        }
-
-        const result = Reflect.set(target, prop, value, receiver);
-
-        // Notify subscribers if value changed
-        if (oldValue !== value) {
-          const propKey = getOptimizedPropertyKey(target, prop);
-          queueNotification(propKey);
-        }
-
-        return result;
+      if (value && typeof value === 'object' && !isObservable(value)) {
+        value = makeObservable(value);
       }
 
-      return Reflect.set(target, prop, value, receiver);
-    }
-  });
+      const oldValue = target[prop as any];
+      const result = Reflect.set(target, prop, value, receiver);
 
-  // Patch array methods on the proxy
-  ARRAY_METHODS.forEach((method) => {
-    const original = target[method as keyof T];
-    if (typeof original !== 'function') return;
+      if (oldValue !== value) {
+        const propKey = getPropertyKey(target, prop);
+        notifySubscribers(propKey);
 
-    (arrayProxy as any)[method] = function (...args: any[]) {
-      const oldLength = this.length;
-
-      // Make new items reactive
-      if (method === 'push' || method === 'unshift') {
-        args = args.map((item) => (item && typeof item === 'object' ? makeObservable(item) : item));
-      } else if (method === 'splice' && args.length > 2) {
-        for (let i = 2; i < args.length; i++) {
-          if (args[i] && typeof args[i] === 'object') {
-            args[i] = makeObservable(args[i]);
-          }
+        if (vGripNotifier) {
+          vGripNotifier(target, prop);
         }
       }
-
-      const result = original.apply(this, args);
-
-      // Handle new items being added
-      if (['push', 'unshift', 'splice'].includes(method)) {
-        handleNewItemsAdded(this, method, args, oldLength);
-      }
-
-      // Notify all array subscribers - use optimized notifications
-      notifyArraySubscribers(this, oldLength);
-
-      // Also notify using property-based approach
-      const arrayId = String(getOptimizedObjectId(this));
-      propertySubscriptions.forEach((subscribers, propKey) => {
-        if (propKey.includes(arrayId)) {
-          subscribers.forEach((subscriber) => {
-            if (liveComponents.has(subscriber)) {
-              if (isBatching) {
-                batchedUpdates.add(subscriber);
-              } else {
-                requestAnimationFrame(() => {
-                  if (liveComponents.has(subscriber)) {
-                    try {
-                      subscriber();
-                    } catch (e) {
-                      console.error('Error in array update:', e);
-                    }
-                  }
-                });
-              }
-            }
-          });
-        }
-      });
 
       return result;
-    };
+    },
+
+    deleteProperty(target, prop) {
+      const result = Reflect.deleteProperty(target, prop);
+
+      if (result) {
+        const propKey = getPropertyKey(target, prop);
+        notifySubscribers(propKey);
+
+        if (vGripNotifier) {
+          vGripNotifier(target, prop);
+        }
+      }
+
+      return result;
+    }
   });
 
   return arrayProxy as T;
 }
 
 function makeMapObservable<T extends Map<any, any>>(target: T): T {
-  const reactive = makeObjectObservable(target);
-
-  MAP_METHODS.forEach((method) => {
-    const original = (reactive as any)[method];
-    if (typeof original !== 'function') return;
-
-    (reactive as any)[method] = function (...args: any[]) {
-      if (method === 'set' && args[1] && typeof args[1] === 'object') {
-        args[1] = makeObservable(args[1]);
-      }
-
-      const result = original.apply(this, args);
-
-      // Handle new items being added
-      if (method === 'set') {
-        handleNewItemsAdded(this, method, args);
-      }
-
-      // Notify subscribers
-      notifyMapSetSubscribers(this, method, args);
-
-      return result;
-    };
+  Object.defineProperty(target, '__vorthainReactive', {
+    value: true,
+    writable: false,
+    enumerable: false,
+    configurable: false
   });
 
-  return reactive;
+  for (const [key, value] of target) {
+    if (value && typeof value === 'object' && !isObservable(value)) {
+      target.set(key, makeObservable(value));
+    }
+  }
+
+  const originalGet = target.get.bind(target);
+  const originalSet = target.set.bind(target);
+  const originalDelete = target.delete.bind(target);
+  const originalClear = target.clear.bind(target);
+  const originalForEach = target.forEach.bind(target);
+  const originalEntries = target.entries.bind(target);
+  const originalValues = target.values.bind(target);
+  const originalKeys = target.keys.bind(target);
+
+  const mapProxy = new Proxy(target, {
+    get(target, prop, receiver) {
+      if (prop === 'size') {
+        const size = target.size;
+
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, 'size');
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, 'size', size);
+        }
+
+        return size;
+      }
+
+      if (prop === 'get') {
+        return function (key: any) {
+          const value = originalGet(key);
+
+          if (currentComponent && !vGripGetCurrentTracker?.()) {
+            const propKey = getPropertyKey(target, key);
+            let subscribers = propertySubscriptions.get(propKey);
+            if (!subscribers) {
+              subscribers = new Set();
+              propertySubscriptions.set(propKey, subscribers);
+            }
+            subscribers.add(currentComponent);
+          }
+
+          const tracker = vGripGetCurrentTracker?.();
+          if (tracker && tracker.isRendering && vGripTrackDependency) {
+            vGripTrackDependency(tracker, target, key, value);
+          }
+
+          if (value && typeof value === 'object' && !isObservable(value)) {
+            const reactiveValue = makeObservable(value);
+            originalSet(key, reactiveValue);
+            return reactiveValue;
+          }
+
+          return value;
+        };
+      }
+
+      if (prop === 'set') {
+        return function (key: any, value: any) {
+          if (value && typeof value === 'object') {
+            value = makeObservable(value);
+          }
+
+          const oldValue = originalGet(key);
+          const oldSize = target.size;
+
+          const result = originalSet(key, value);
+
+          if (oldValue !== value) {
+            const propKey = getPropertyKey(target, key);
+            notifySubscribers(propKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, key);
+            }
+          }
+
+          if (oldSize !== target.size) {
+            const sizeKey = getPropertyKey(target, 'size');
+            notifySubscribers(sizeKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, 'size');
+            }
+          }
+
+          const iterKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+          notifySubscribers(iterKey);
+
+          if (vGripNotifier) {
+            vGripNotifier(target, Symbol.for('__map_iteration__'));
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'delete') {
+        return function (key: any) {
+          const oldSize = target.size;
+          const result = originalDelete(key);
+
+          if (result) {
+            const propKey = getPropertyKey(target, key);
+            notifySubscribers(propKey);
+
+            const iterKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+            notifySubscribers(iterKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, key);
+              vGripNotifier(target, Symbol.for('__map_iteration__'));
+            }
+
+            if (oldSize !== target.size) {
+              const sizeKey = getPropertyKey(target, 'size');
+              notifySubscribers(sizeKey);
+
+              if (vGripNotifier) {
+                vGripNotifier(target, 'size');
+              }
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'clear') {
+        return function () {
+          const oldSize = target.size;
+          const oldKeys = Array.from(target.keys());
+
+          const result = originalClear();
+
+          if (oldSize > 0) {
+            oldKeys.forEach((key) => {
+              const propKey = getPropertyKey(target, key);
+              notifySubscribers(propKey);
+
+              if (vGripNotifier) {
+                vGripNotifier(target, key);
+              }
+            });
+
+            const sizeKey = getPropertyKey(target, 'size');
+            notifySubscribers(sizeKey);
+
+            const iterKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+            notifySubscribers(iterKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, 'size');
+              vGripNotifier(target, Symbol.for('__map_iteration__'));
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'forEach') {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__map_iteration__'), null);
+        }
+
+        return function (callback: Function, thisArg?: any) {
+          return originalForEach((value: any, key: any, map: Map<any, any>) => {
+            if (value && typeof value === 'object' && !isObservable(value)) {
+              value = makeObservable(value);
+              originalSet(key, value);
+            }
+            callback.call(thisArg, value, key, map);
+          });
+        };
+      }
+
+      if (prop === 'keys') {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__map_iteration__'), null);
+        }
+
+        return function* () {
+          for (const key of originalKeys()) {
+            yield key;
+          }
+        };
+      }
+
+      if (prop === 'entries' || prop === Symbol.iterator) {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__map_iteration__'), null);
+        }
+
+        return function* () {
+          for (const [key, value] of originalEntries()) {
+            let reactiveValue = value;
+            if (value && typeof value === 'object' && !isObservable(value)) {
+              reactiveValue = makeObservable(value);
+              originalSet(key, reactiveValue);
+            }
+            yield [key, reactiveValue];
+          }
+        };
+      }
+
+      if (prop === 'values') {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__map_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__map_iteration__'), null);
+        }
+
+        return function* () {
+          for (const value of originalValues()) {
+            if (value && typeof value === 'object' && !isObservable(value)) {
+              const key = Array.from(originalEntries()).find(([k, v]) => v === value)?.[0];
+              if (key !== undefined) {
+                const reactiveValue = makeObservable(value);
+                originalSet(key, reactiveValue);
+                yield reactiveValue;
+              } else {
+                yield value;
+              }
+            } else {
+              yield value;
+            }
+          }
+        };
+      }
+
+      return Reflect.get(target, prop, target);
+    }
+  });
+
+  return mapProxy as T;
 }
 
 function makeSetObservable<T extends Set<any>>(target: T): T {
-  const reactive = makeObjectObservable(target);
-
-  SET_METHODS.forEach((method) => {
-    const original = (reactive as any)[method];
-    if (typeof original !== 'function') return;
-
-    (reactive as any)[method] = function (...args: any[]) {
-      if (method === 'add' && args[0] && typeof args[0] === 'object') {
-        args[0] = makeObservable(args[0]);
-      }
-
-      const result = original.apply(this, args);
-
-      // Handle new items being added
-      if (method === 'add') {
-        handleNewItemsAdded(this, method, args);
-      }
-
-      // Notify subscribers
-      notifyMapSetSubscribers(this, method, args);
-
-      return result;
-    };
+  Object.defineProperty(target, '__vorthainReactive', {
+    value: true,
+    writable: false,
+    enumerable: false,
+    configurable: false
   });
 
-  return reactive;
+  const existingValues = Array.from(target);
+  target.clear();
+  existingValues.forEach((value) => {
+    if (value && typeof value === 'object' && !isObservable(value)) {
+      target.add(makeObservable(value));
+    } else {
+      target.add(value);
+    }
+  });
+
+  const originalAdd = target.add.bind(target);
+  const originalDelete = target.delete.bind(target);
+  const originalClear = target.clear.bind(target);
+  const originalForEach = target.forEach.bind(target);
+  const originalValues = target.values.bind(target);
+  const originalEntries = target.entries.bind(target);
+  const originalHas = target.has.bind(target); // Bind the 'has' method
+
+  const setProxy = new Proxy(target, {
+    get(target, prop, receiver) {
+      if (prop === 'size') {
+        const size = target.size;
+
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, 'size');
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, 'size', size);
+        }
+
+        return size;
+      }
+
+      if (prop === 'has') {
+        return function (value: any) {
+          if (currentComponent && !vGripGetCurrentTracker?.()) {
+            const iterKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+            let subscribers = propertySubscriptions.get(iterKey);
+            if (!subscribers) {
+              subscribers = new Set();
+              propertySubscriptions.set(iterKey, subscribers);
+            }
+            subscribers.add(currentComponent);
+          }
+          return originalHas(value);
+        };
+      }
+
+      if (prop === 'add') {
+        return function (value: any) {
+          if (value && typeof value === 'object') {
+            value = makeObservable(value);
+          }
+
+          const oldSize = target.size;
+          const result = originalAdd(value);
+
+          if (oldSize !== target.size) {
+            const sizeKey = getPropertyKey(target, 'size');
+            notifySubscribers(sizeKey);
+
+            const iterKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+            notifySubscribers(iterKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, 'size');
+              vGripNotifier(target, Symbol.for('__set_iteration__'));
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'delete') {
+        return function (value: any) {
+          const oldSize = target.size;
+          const result = originalDelete(value);
+
+          if (result) {
+            const sizeKey = getPropertyKey(target, 'size');
+            notifySubscribers(sizeKey);
+
+            const iterKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+            notifySubscribers(iterKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, 'size');
+              vGripNotifier(target, Symbol.for('__set_iteration__'));
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'clear') {
+        return function () {
+          const oldSize = target.size;
+          const result = originalClear();
+
+          if (oldSize > 0) {
+            const sizeKey = getPropertyKey(target, 'size');
+            notifySubscribers(sizeKey);
+
+            const iterKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+            notifySubscribers(iterKey);
+
+            if (vGripNotifier) {
+              vGripNotifier(target, 'size');
+              vGripNotifier(target, Symbol.for('__set_iteration__'));
+            }
+          }
+
+          return result;
+        };
+      }
+
+      if (prop === 'forEach') {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__set_iteration__'), null);
+        }
+
+        return function (callback: Function, thisArg?: any) {
+          return originalForEach((value: any, set: Set<any>) => {
+            if (value && typeof value === 'object' && !isObservable(value)) {
+              value = makeObservable(value);
+            }
+            callback.call(thisArg, value, value, set);
+          });
+        };
+      }
+
+      if (prop === 'values' || prop === 'keys' || prop === Symbol.iterator) {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__set_iteration__'), null);
+        }
+
+        return function* () {
+          for (const value of originalValues()) {
+            if (value && typeof value === 'object' && !isObservable(value)) {
+              yield makeObservable(value);
+            } else {
+              yield value;
+            }
+          }
+        };
+      }
+
+      if (prop === 'entries') {
+        if (currentComponent && !vGripGetCurrentTracker?.()) {
+          const propKey = getPropertyKey(target, Symbol.for('__set_iteration__'));
+          let subscribers = propertySubscriptions.get(propKey);
+          if (!subscribers) {
+            subscribers = new Set();
+            propertySubscriptions.set(propKey, subscribers);
+          }
+          subscribers.add(currentComponent);
+        }
+
+        const tracker = vGripGetCurrentTracker?.();
+        if (tracker && tracker.isRendering && vGripTrackDependency) {
+          vGripTrackDependency(tracker, target, Symbol.for('__set_iteration__'), null);
+        }
+
+        return function* () {
+          for (const [value1, value2] of originalEntries()) {
+            let reactiveValue = value1;
+            if (value1 && typeof value1 === 'object' && !isObservable(value1)) {
+              reactiveValue = makeObservable(value1);
+            }
+            yield [reactiveValue, reactiveValue];
+          }
+        };
+      }
+
+      return Reflect.get(target, prop, target);
+    }
+  });
+
+  return setProxy as T;
 }
 
-// Safer collection interest tracking
-function handleNewItemsAdded(collection: any, method: string, args: any[], oldLength?: number) {
-  // Find all components interested in this collection
-  const interestedComponents = new Set<() => void>();
+function notifySubscribers(propKey: string) {
+  const subscribers = propertySubscriptions.get(propKey);
+  if (!subscribers || subscribers.size === 0) return;
 
-  // Iterate through active components and check their interests
-  activeComponents.forEach((component) => {
-    const collections = componentCollectionInterests.get(component);
-    if (collections && collections.has(collection)) {
-      interestedComponents.add(component);
-    }
-  });
+  const subscriberArray = Array.from(subscribers);
 
-  if (interestedComponents.size === 0) return;
-
-  // Determine new items based on collection type and method
-  let newItems: any[] = [];
-
-  if (Array.isArray(collection)) {
-    if (method === 'push') {
-      newItems = args;
-    } else if (method === 'unshift') {
-      newItems = args;
-    } else if (method === 'splice' && args.length > 2) {
-      newItems = args.slice(2);
-    }
-  } else if (collection instanceof Map && method === 'set') {
-    if (args[1] && typeof args[1] === 'object') {
-      newItems = [args[1]];
-    }
-  } else if (collection instanceof Set && method === 'add') {
-    if (args[0] && typeof args[0] === 'object') {
-      newItems = [args[0]];
-    }
-  }
-
-  // Subscribe all interested components to new items
-  if (newItems.length > 0) {
-    newItems.forEach((newItem) => {
-      if (newItem && typeof newItem === 'object') {
-        interestedComponents.forEach((component) => {
-          subscribeComponentToNewObject(component, newItem);
+  subscriberArray.forEach((subscriber) => {
+    if (liveComponents.has(subscriber)) {
+      if (isBatching) {
+        batchedUpdates.add(subscriber);
+      } else {
+        queueMicrotask(() => {
+          if (liveComponents.has(subscriber)) {
+            try {
+              subscriber();
+            } catch (e) {
+              console.error('Error in subscriber update:', e);
+              liveComponents.delete(subscriber);
+              subscribers.delete(subscriber);
+            }
+          }
         });
       }
-    });
-  }
-}
-
-// Subscribe a component to all properties of a new object recursively
-function subscribeComponentToNewObject(component: () => void, newObject: any, visited = new Set()) {
-  if (!newObject || typeof newObject !== 'object' || visited.has(newObject)) return;
-  visited.add(newObject);
-
-  const prevComponent = currentComponent;
-  currentComponent = component;
-
-  try {
-    if (Array.isArray(newObject)) {
-      // Access length and all items
-      newObject.length;
-      for (let i = 0; i < newObject.length; i++) {
-        subscribeComponentToNewObject(component, newObject[i], visited);
-      }
-    } else if (newObject instanceof Map) {
-      newObject.size;
-      for (const [key, value] of newObject) {
-        subscribeComponentToNewObject(component, value, visited);
-      }
-    } else if (newObject instanceof Set) {
-      newObject.size;
-      for (const value of newObject) {
-        subscribeComponentToNewObject(component, value, visited);
-      }
     } else {
-      // Access all object properties to set up subscriptions
-      Object.keys(newObject).forEach((key) => {
-        try {
-          const value = newObject[key]; // Triggers getter and sets up subscription
-          subscribeComponentToNewObject(component, value, visited);
-        } catch (e) {
-          // Skip problematic properties
-        }
-      });
-    }
-  } finally {
-    currentComponent = prevComponent;
-  }
-}
-
-// Notify array subscribers
-function notifyArraySubscribers(array: any[], oldLength: number) {
-  // Notify length subscribers if length changed
-  if (array.length !== oldLength) {
-    const lengthPropKey = getOptimizedPropertyKey(array, 'length');
-    queueNotification(lengthPropKey);
-  }
-
-  // Fallback: notify any subscribers to array-related properties
-  const arrayId = String(getOptimizedObjectId(array));
-  propertySubscriptions.forEach((subscribers, propKey) => {
-    if (propKey.includes(arrayId)) {
-      subscribers.forEach((subscriber) => {
-        if (liveComponents.has(subscriber)) {
-          if (isBatching) {
-            batchedUpdates.add(subscriber);
-          } else {
-            requestAnimationFrame(() => {
-              if (liveComponents.has(subscriber)) {
-                try {
-                  subscriber();
-                } catch (e) {
-                  console.error('Error in array notification:', e);
-                }
-              }
-            });
-          }
-        }
-      });
+      subscribers.delete(subscriber);
     }
   });
-}
 
-// Notify Map/Set subscribers
-function notifyMapSetSubscribers(
-  collection: Map<any, any> | Set<any>,
-  method: string,
-  args: any[]
-) {
-  if (method === 'set' || method === 'add' || method === 'delete' || method === 'clear') {
-    const sizePropKey = getOptimizedPropertyKey(collection, 'size');
-    queueNotification(sizePropKey);
+  if (subscribers.size === 0) {
+    propertySubscriptions.delete(propKey);
   }
 }
 
-function isObservable(obj: any): boolean {
-  return obj && typeof obj === 'object' && obj.__vorthainReactive === true;
-}
-
-/**
- * Hook that subscribes components to accessed properties
- */
 export function useObservableSubscription<T extends object>(observableState: T): T {
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
-  useEffect(() => {
-    // Mark component as live
-    liveComponents.add(forceUpdate);
-    activeComponents.add(forceUpdate);
+  const instanceRef = useRef<{
+    subscriptions: Set<string>;
+    forceUpdate: () => void;
+    isCleanedUp: boolean;
+  } | null>(null);
 
-    currentComponent = forceUpdate;
+  if (!instanceRef.current) {
+    instanceRef.current = {
+      subscriptions: new Set(),
+      forceUpdate,
+      isCleanedUp: false
+    };
+  }
+
+  instanceRef.current.forceUpdate = forceUpdate;
+
+  liveComponents.add(forceUpdate);
+
+  useEffect(() => {
+    const instance = instanceRef.current!;
+
+    liveComponents.add(instance.forceUpdate);
+
+    currentComponent = instance.forceUpdate;
 
     try {
       subscribeToObject(observableState);
@@ -950,24 +1150,182 @@ export function useObservableSubscription<T extends object>(observableState: T):
       currentComponent = null;
     }
 
-    // Set up cleanup function for memory management
-    const cleanup = () => {
-      cleanupSubscriptions(forceUpdate);
+    instance.subscriptions.forEach((propKey) => {
+      let subscribers = propertySubscriptions.get(propKey);
+      if (!subscribers) {
+        subscribers = new Set();
+        propertySubscriptions.set(propKey, subscribers);
+      }
+      subscribers.forEach((sub) => {
+        if (!liveComponents.has(sub) && sub !== instance.forceUpdate) {
+          subscribers!.delete(sub);
+        }
+      });
+      subscribers.add(instance.forceUpdate);
+    });
+
+    instance.isCleanedUp = false;
+
+    return () => {
+      instance.isCleanedUp = true;
+
+      queueMicrotask(() => {
+        if (instance.isCleanedUp) {
+          liveComponents.delete(instance.forceUpdate);
+
+          instance.subscriptions.forEach((propKey) => {
+            const subscribers = propertySubscriptions.get(propKey);
+            if (subscribers) {
+              subscribers.delete(instance.forceUpdate);
+              if (subscribers.size === 0) {
+                propertySubscriptions.delete(propKey);
+              }
+            }
+          });
+        }
+      });
     };
-
-    componentCleanupFns.set(forceUpdate, cleanup);
-
-    return cleanup;
   }, [observableState]);
 
-  // Create a proxy that ensures currentComponent is set during property access
   return new Proxy(observableState, {
     get(target, prop, receiver) {
+      const instance = instanceRef.current!;
+
+      // Helper function to wrap Map.get return values
+      const wrapMapGetResult = (originalGet: Function, target: Map<any, any>) => {
+        return function (key: any) {
+          const result = originalGet.call(target, key);
+
+          if (result && typeof result === 'object') {
+            const proxyKey = Symbol.for('__vorthain_proxy__');
+            if ((result as any)[proxyKey]) {
+              return result;
+            }
+
+            const proxy = new Proxy(result, {
+              get(innerTarget, innerProp, innerReceiver) {
+                if (innerProp === proxyKey) return true;
+
+                // Recursive handling for nested Maps
+                if (typeof (innerTarget as any)[innerProp] === 'function') {
+                  if (innerTarget instanceof Map && innerProp === 'get') {
+                    return wrapMapGetResult(
+                      Reflect.get(innerTarget, innerProp, innerReceiver),
+                      innerTarget
+                    );
+                  }
+                  return Reflect.get(innerTarget, innerProp, innerReceiver);
+                }
+
+                currentComponent = instance.forceUpdate;
+                liveComponents.add(instance.forceUpdate);
+
+                const innerPropKey = getPropertyKey(innerTarget, innerProp);
+
+                if (!instance.subscriptions.has(innerPropKey)) {
+                  instance.subscriptions.add(innerPropKey);
+                }
+
+                let innerSubscribers = propertySubscriptions.get(innerPropKey);
+                if (!innerSubscribers) {
+                  innerSubscribers = new Set();
+                  propertySubscriptions.set(innerPropKey, innerSubscribers);
+                }
+                innerSubscribers.add(instance.forceUpdate);
+
+                const value = Reflect.get(innerTarget, innerProp, innerReceiver);
+
+                // Handle nested objects/Maps/Sets
+                if (value && typeof value === 'object') {
+                  return new Proxy(value, this);
+                }
+
+                return value;
+              }
+            });
+
+            return proxy;
+          }
+
+          return result;
+        };
+      };
+
+      // Handle functions
+      if (typeof (target as any)[prop] === 'function') {
+        if (target instanceof Map && prop === 'get') {
+          return wrapMapGetResult(Reflect.get(target, prop, receiver), target);
+        }
+        return Reflect.get(target, prop, receiver);
+      }
+
+      // Regular property access
+      const propKey = getPropertyKey(target, prop);
+
+      if (!instance.subscriptions.has(propKey)) {
+        instance.subscriptions.add(propKey);
+      }
+
+      let subscribers = propertySubscriptions.get(propKey);
+      if (!subscribers) {
+        subscribers = new Set();
+        propertySubscriptions.set(propKey, subscribers);
+      }
+
+      subscribers.add(instance.forceUpdate);
+
       const prevComponent = currentComponent;
-      currentComponent = forceUpdate;
+      if (!vGripGetCurrentTracker?.()) {
+        currentComponent = instance.forceUpdate;
+      }
 
       try {
-        return Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop, receiver);
+
+        if (value && typeof value === 'object' && !vGripGetCurrentTracker?.()) {
+          const proxyKey = Symbol.for('__vorthain_proxy__');
+          if ((value as any)[proxyKey]) {
+            return value;
+          }
+
+          const proxy = new Proxy(value, {
+            get(innerTarget, innerProp, innerReceiver) {
+              if (innerProp === proxyKey) return true;
+
+              if (typeof (innerTarget as any)[innerProp] === 'function') {
+                if (innerTarget instanceof Map && innerProp === 'get') {
+                  return wrapMapGetResult(
+                    Reflect.get(innerTarget, innerProp, innerReceiver),
+                    innerTarget
+                  );
+                }
+                return Reflect.get(innerTarget, innerProp, innerReceiver);
+              }
+
+              currentComponent = instance.forceUpdate;
+              liveComponents.add(instance.forceUpdate);
+
+              const innerPropKey = getPropertyKey(innerTarget, innerProp);
+
+              if (!instance.subscriptions.has(innerPropKey)) {
+                instance.subscriptions.add(innerPropKey);
+              }
+
+              let innerSubscribers = propertySubscriptions.get(innerPropKey);
+              if (!innerSubscribers) {
+                innerSubscribers = new Set();
+                propertySubscriptions.set(innerPropKey, innerSubscribers);
+              }
+              innerSubscribers.add(instance.forceUpdate);
+
+              return Reflect.get(innerTarget, innerProp, innerReceiver);
+            }
+          });
+
+          return proxy;
+        }
+
+        return value;
       } finally {
         currentComponent = prevComponent;
       }
@@ -981,83 +1339,27 @@ function subscribeToObject(obj: any, visited = new WeakSet()) {
 
   try {
     if (Array.isArray(obj)) {
-      // Track that current component is interested in this array
-      if (currentComponent) {
-        trackComponentInterest(currentComponent, obj);
-      }
-
-      // Subscribe to length and all items
       obj.length;
       for (let i = 0; i < obj.length; i++) {
         const item = obj[i];
-        if (item && typeof item === 'object') {
-          subscribeToObject(item, visited);
-        }
       }
     } else if (obj instanceof Map) {
-      if (currentComponent) {
-        trackComponentInterest(currentComponent, obj);
-      }
-
       obj.size;
-      for (const [key, value] of obj) {
-        if (value && typeof value === 'object') {
-          subscribeToObject(value, visited);
-        }
-      }
     } else if (obj instanceof Set) {
-      if (currentComponent) {
-        trackComponentInterest(currentComponent, obj);
-      }
-
       obj.size;
-      for (const value of obj) {
-        if (value && typeof value === 'object') {
-          subscribeToObject(value, visited);
-        }
-      }
     } else {
       Object.keys(obj).forEach((key) => {
         try {
-          const value = obj[key];
-          if (value && typeof value === 'object') {
-            subscribeToObject(value, visited);
+          const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+          if (descriptor && descriptor.get) {
+            return;
           }
-        } catch (e) {
-          // Skip problematic properties
-        }
+          if (typeof obj[key] === 'function') {
+            return;
+          }
+          obj[key];
+        } catch (e) {}
       });
     }
-  } catch (e) {
-    // Skip problematic objects
-  }
-}
-
-function trackComponentInterest(component: () => void, collection: object) {
-  if (!componentCollectionInterests.has(component)) {
-    componentCollectionInterests.set(component, new Set());
-  }
-  componentCollectionInterests.get(component)!.add(collection);
-}
-
-function cleanupSubscriptions(updateFn: () => void) {
-  // Mark component as no longer live
-  liveComponents.delete(updateFn);
-  activeComponents.delete(updateFn);
-
-  // Remove from property subscriptions
-  let cleanedCount = 0;
-  propertySubscriptions.forEach((subscribers, propKey) => {
-    if (subscribers.has(updateFn)) {
-      subscribers.delete(updateFn);
-      cleanedCount++;
-    }
-    if (subscribers.size === 0) {
-      propertySubscriptions.delete(propKey);
-    }
-  });
-
-  // WeakMap will handle collection interests cleanup automatically
-  // Remove cleanup function reference
-  componentCleanupFns.delete(updateFn);
+  } catch (e) {}
 }
