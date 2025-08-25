@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@vorthain/react-state.svg)](https://www.npmjs.com/package/@vorthain/react-state)
 [![Downloads](https://img.shields.io/npm/dm/@vorthain/react-state.svg)](https://www.npmjs.com/package/@vorthain/react-state)
+[![Bundle Size](https://img.shields.io/bundlephobia/minzip/@vorthain/react-state)](https://bundlephobia.com/package/@vorthain/react-state)
 
 **Zero-configuration reactive state for React**
 
