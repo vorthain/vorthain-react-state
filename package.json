@@ -23,7 +23,7 @@
     "prepare": "npm run build",
     "type-check": "tsc --noEmit",
     "prepublishOnly": "npm run type-check && npm run test && npm run build",
-    "clean": "rm -rf dist",
+    "clean": "rmdir /s /q dist 2>nul || del /q dist\\* 2>nul || echo Clean completed",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
