@@ -1,6 +1,6 @@
 {
   "name": "@vorthain/react-state",
-  "version": "0.2.5",
+  "version": "0.2.4",
   "description": "A minimal and reactive state management library for React, enabling automatic UI updates through direct, mutable state changes.",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
