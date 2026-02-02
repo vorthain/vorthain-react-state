@@ -29,7 +29,12 @@ let currentRenderingTracker: VGripTracker | null = null;
 let insideVActionBatch = false;
 const vActionBatchedTrackers = new Set<VGripTracker>();
 const pendingTrackerUpdates = new Set<VGripTracker>();
-let updateFlushScheduled = false;
+// Previously used as a coalescing guard when flushTrackerUpdates was deferred
+// via queueMicrotask. The flag prevented duplicate microtasks from being
+// scheduled when multiple properties changed in quick succession. Now that
+// updates flush synchronously (to preserve controlled input cursor position),
+// this flag is no longer meaningful — kept here for historical context.
+// let updateFlushScheduled = false;
 let nextTrackerId = 0;
 let nextObjectId = 0;
 const objectIds = new WeakMap<object, string>();
@@ -266,20 +271,12 @@ export function vGripBatchEnd() {
     const trackers = Array.from(vActionBatchedTrackers);
     vActionBatchedTrackers.clear();
 
-    queueMicrotask(() => {
-      const trackersToUpdate = trackers.filter((t) => t.isAlive);
-
-      if (trackersToUpdate.length > 0) {
-        requestAnimationFrame(() => {
-          trackersToUpdate.forEach((tracker) => {
-            if (tracker.isAlive) {
-              tracker.generation++;
-              tracker.renderCount++;
-              tracker.lastRenderTime = Date.now();
-              tracker.forceUpdate();
-            }
-          });
-        });
+    trackers.forEach((tracker) => {
+      if (tracker.isAlive) {
+        tracker.generation++;
+        tracker.renderCount++;
+        tracker.lastRenderTime = Date.now();
+        tracker.forceUpdate();
       }
     });
   }
@@ -296,14 +293,12 @@ function scheduleTrackerUpdate(tracker: VGripTracker) {
   }
 }
 
+// Previously this function used a `updateFlushScheduled` flag and
+// queueMicrotask to coalesce multiple property changes into a single
+// deferred flush. Now flushes synchronously so React controlled inputs
+// preserve cursor position (selectionStart/selectionEnd).
 function scheduleUpdateFlush() {
-  if (updateFlushScheduled) return;
-  updateFlushScheduled = true;
-
-  queueMicrotask(() => {
-    updateFlushScheduled = false;
-    flushTrackerUpdates();
-  });
+  flushTrackerUpdates();
 }
 
 function flushTrackerUpdates() {
@@ -312,20 +307,14 @@ function flushTrackerUpdates() {
   const trackers = Array.from(pendingTrackerUpdates);
   pendingTrackerUpdates.clear();
 
-  const trackersToUpdate = trackers.filter((t) => t.isAlive);
-
-  if (trackersToUpdate.length > 0) {
-    requestAnimationFrame(() => {
-      trackersToUpdate.forEach((tracker) => {
-        if (tracker.isAlive) {
-          tracker.generation++;
-          tracker.renderCount++;
-          tracker.lastRenderTime = Date.now();
-          tracker.forceUpdate();
-        }
-      });
-    });
-  }
+  trackers.forEach((tracker) => {
+    if (tracker.isAlive) {
+      tracker.generation++;
+      tracker.renderCount++;
+      tracker.lastRenderTime = Date.now();
+      tracker.forceUpdate();
+    }
+  });
 }
 
 export function vGrip<P extends object>(Component: React.ComponentType<P>): React.ComponentType<P> {

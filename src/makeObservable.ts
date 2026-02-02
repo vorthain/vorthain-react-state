@@ -66,23 +66,19 @@ export function vAction<T>(actionFn: () => T): T {
   try {
     const result = actionFn();
 
-    if (batchedUpdates.size > 0 || vGripBatchEndFn) {
-      queueMicrotask(() => {
-        batchedUpdates.forEach((updateFn) => {
-          if (liveComponents.has(updateFn)) {
-            try {
-              updateFn();
-            } catch (e) {
-              console.error('Error in batched update:', e);
-            }
-          }
-        });
-        batchedUpdates.clear();
-
-        if (vGripBatchEndFn) {
-          vGripBatchEndFn();
+    batchedUpdates.forEach((updateFn) => {
+      if (liveComponents.has(updateFn)) {
+        try {
+          updateFn();
+        } catch (e) {
+          console.error('Error in batched update:', e);
         }
-      });
+      }
+    });
+    batchedUpdates.clear();
+
+    if (vGripBatchEndFn) {
+      vGripBatchEndFn();
     }
 
     return result;
@@ -1092,17 +1088,13 @@ function notifySubscribers(propKey: string) {
       if (isBatching) {
         batchedUpdates.add(subscriber);
       } else {
-        queueMicrotask(() => {
-          if (liveComponents.has(subscriber)) {
-            try {
-              subscriber();
-            } catch (e) {
-              console.error('Error in subscriber update:', e);
-              liveComponents.delete(subscriber);
-              subscribers.delete(subscriber);
-            }
-          }
-        });
+        try {
+          subscriber();
+        } catch (e) {
+          console.error('Error in subscriber update:', e);
+          liveComponents.delete(subscriber);
+          subscribers.delete(subscriber);
+        }
       }
     } else {
       subscribers.delete(subscriber);
